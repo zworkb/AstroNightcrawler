@@ -78,14 +78,14 @@ class StarMap:
     async def initialize(
         self,
         wasm_url: str = (
-            "/static/stellarium/stellarium-web-engine.wasm"
+            "/static/stellarium/stellarium-web-engine.js"
         ),
-        skydata_url: str = "/static/skydata",
+        skydata_url: str = "/skydata",
     ) -> None:
         """Initialise the Stellarium engine inside the container.
 
         Args:
-            wasm_url:    URL path to the compiled ``.wasm`` file.
+            wasm_url:    URL path to the compiled JS loader (loads .wasm).
             skydata_url: Base URL for sky-data catalogues.
         """
         js = (

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from typing import Any
 
@@ -11,6 +12,7 @@ from nicegui import ui
 from src.app_state import AppState
 from src.models.freehand import fit_bezier_to_points, rdp_simplify
 from src.models.project import ControlPoint, SplinePath
+from src.starmap.engine import StarMap
 from src.ui.bottom_panel import BottomPanelComponent
 from src.ui.capture_view import CaptureViewComponent
 from src.ui.toolbar import ToolbarComponent
@@ -37,13 +39,16 @@ def create_layout() -> None:
         toolbar.render()
         capture_view.render()
         with ui.element("div").classes("map-container"):
-            ui.label(
-                "Star map \u2014 install Stellarium Web Engine to enable",
-            ).classes(
-                "text-grey-6"
-                " absolute-center"
-                " text-center"
-            )
+            star_map = StarMap(width="100%", height="100%")
+
+        async def _init_starmap() -> None:
+            with contextlib.suppress(Exception):
+                await star_map.initialize(
+                    wasm_url="/static/stellarium/stellarium-web-engine.js",
+                    skydata_url="/skydata/",
+                )
+
+        ui.timer(0.5, _init_starmap, once=True)
         panel = BottomPanelComponent(state)
         panel.render()
 

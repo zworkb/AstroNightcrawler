@@ -137,22 +137,47 @@ window.stelBridge = (() => {
             });
             ro.observe(container);
 
-            // Load and initialise the Stellarium engine.
-            // The engine constructor API varies by build; adapt as needed.
-            if (typeof StelWebEngine !== "undefined") {
-                engine = new StelWebEngine({
-                    canvas: canvas,
-                    wasmFile: wasmUrl,
-                    skydataUrl: skydataUrl,
+            // Load the Stellarium WASM module.
+            if (typeof StelWebEngine === "undefined") {
+                console.warn("StelWebEngine not found — loading script...");
+                await new Promise((resolve, reject) => {
+                    const s = document.createElement("script");
+                    s.src = wasmUrl;
+                    s.onload = resolve;
+                    s.onerror = reject;
+                    document.head.appendChild(s);
                 });
-            } else {
-                console.warn(
-                    "StelWebEngine not found — bridge loaded without engine. " +
-                    "Ensure the Stellarium WASM script is loaded first."
-                );
+            }
+
+            if (typeof StelWebEngine === "undefined") {
+                console.error("StelWebEngine still not available after loading script.");
+                return;
+            }
+
+            // Initialize the engine via the module factory.
+            engine = await new Promise((resolve) => {
+                StelWebEngine({
+                    canvas: canvas,
+                    wasmFile: wasmUrl.replace(/\.js$/, ".wasm"),
+                    onReady: (stel) => resolve(stel),
+                });
+            });
+
+            // Register star data sources after engine is ready.
+            if (engine && engine.core) {
+                const base = skydataUrl.replace(/\/$/, "");
+                try { engine.core.stars.addDataSource({ url: base + "/stars" }); } catch(_) {}
+                try { engine.core.dsos.addDataSource({ url: base + "/dso" }); } catch(_) {}
+                try {
+                    engine.core.skycultures.addDataSource({
+                        url: base + "/skycultures/western", key: "western"
+                    });
+                } catch(_) {}
+                try { engine.core.milkyway.addDataSource({ url: base + "/surveys/milkyway" }); } catch(_) {}
             }
 
             attachMouseEvents(container);
+            console.log("Stellarium Web Engine initialized.");
         },
 
         /**
