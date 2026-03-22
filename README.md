@@ -1,5 +1,7 @@
 # AstroNightcrawler
 
+> **⚠️ Work in Progress** — This project is in early development and not yet functional for real telescope use. The star map UI and path editor are working, but telescope control and video rendering have not been tested with actual hardware.
+
 A browser-based application for planning and executing imaging sequences with a remote-controlled telescope. Draw a path on an interactive star map, and the telescope follows it point by point, capturing images at each position. The resulting frames can be assembled into a video.
 
 ## What it does
