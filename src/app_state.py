@@ -94,6 +94,18 @@ class AppState:
         self.project = Project.model_validate(data)
         self.undo_stack = UndoStack()
 
+    def load_project_from_json(self, json_str: str) -> None:
+        """Load a project from a JSON string.
+
+        Replaces the current project and resets undo history.
+
+        Args:
+            json_str: JSON-encoded project data.
+        """
+        self.project = Project.model_validate_json(json_str)
+        self.update_capture_points()
+        self.undo_stack = UndoStack()
+
     def start_capture(self) -> CaptureController:
         """Create a CaptureController for the current project.
 

@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import tempfile
 from collections.abc import Callable
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from nicegui import ui
@@ -103,13 +105,13 @@ class ToolbarComponent:
         """Render save/load buttons."""
         save_btn = ui.button(
             icon="save",
-            on_click=self._action("save"),
+            on_click=self._on_save,
         ).props("flat dense")
         save_btn.tooltip("Save")
 
         load_btn = ui.button(
             icon="folder_open",
-            on_click=self._action("load"),
+            on_click=self._on_load,
         ).props("flat dense")
         load_btn.tooltip("Load")
 
@@ -122,6 +124,40 @@ class ToolbarComponent:
             color="green",
         )
         btn.tooltip("Start Capture Sequence")
+
+    async def _on_save(self) -> None:
+        """Save the project to a temp file and trigger download."""
+        data = self.state.project.model_dump_json(indent=2)
+        tmp = Path(tempfile.mktemp(suffix=".json"))
+        tmp.write_text(data)
+        ui.download(tmp)
+        ui.notify("Project saved", type="positive")
+
+    async def _on_load(self) -> None:
+        """Open a dialog for uploading a project JSON file."""
+        with ui.dialog() as dialog, ui.card():
+            ui.label("Load Project")
+            ui.upload(
+                on_upload=lambda e: self._handle_upload(e, dialog),
+            ).props('accept=".json"')
+        dialog.open()
+
+    async def _handle_upload(
+        self,
+        event: ui.upload.UploadEventArguments,  # type: ignore[attr-defined]
+        dialog: ui.dialog,
+    ) -> None:
+        """Parse uploaded JSON and replace the current project.
+
+        Args:
+            event: Upload event with file content.
+            dialog: The open dialog to close after loading.
+        """
+        content = event.content.read().decode()
+        self.state.load_project_from_json(content)
+        dialog.close()
+        await _refresh_overlay(self.state)
+        ui.notify("Project loaded", type="positive")
 
     def _action(self, name: str) -> Callable[[], None]:
         """Return the callback for *name*, or a no-op."""
