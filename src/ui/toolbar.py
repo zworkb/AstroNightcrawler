@@ -6,7 +6,7 @@ import json
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nicegui import ui
 
@@ -144,7 +144,7 @@ class ToolbarComponent:
 
     async def _handle_upload(
         self,
-        event: ui.upload.UploadEventArguments,  # type: ignore[attr-defined]
+        event: Any,
         dialog: ui.dialog,
     ) -> None:
         """Parse uploaded JSON and replace the current project.
