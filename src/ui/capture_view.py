@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from nicegui import ui
+from nicegui.elements.button import Button
+from nicegui.elements.label import Label
 
 from src.capture.controller import CaptureState
 
@@ -22,16 +24,16 @@ class CaptureViewComponent:
     def __init__(self) -> None:
         """Initialise capture view with empty UI references."""
         self._controller: CaptureController | None = None
-        self._timer: Any = None
-        self._container: Any = None
-        self._progress: Any = None
-        self._status_label: Any = None
-        self._point_label: Any = None
-        self._exposure_label: Any = None
-        self._remaining_label: Any = None
-        self._pause_btn: Any = None
-        self._skip_btn: Any = None
-        self._cancel_btn: Any = None
+        self._timer: ui.timer | None = None
+        self._container: ui.row | None = None
+        self._progress: ui.linear_progress | None = None
+        self._status_label: Label | None = None
+        self._point_label: Label | None = None
+        self._exposure_label: Label | None = None
+        self._remaining_label: Label | None = None
+        self._pause_btn: Button | None = None
+        self._skip_btn: Button | None = None
+        self._cancel_btn: Button | None = None
 
     def render(self) -> None:
         """Create the capture progress bar and control row (initially hidden)."""

@@ -1,13 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Read(/home/phil/dev/astro/nicegui/sequence-planner/**)",
-      "Edit(/home/phil/dev/astro/nicegui/sequence-planner/**)",
-      "Write(/home/phil/dev/astro/nicegui/sequence-planner/**)",
-      "Glob(/home/phil/dev/astro/nicegui/sequence-planner/**)",
-      "Grep(/home/phil/dev/astro/nicegui/sequence-planner/**)",
+      "Read(**)",
+      "Edit(**)",
+      "Write(**)",
+      "Glob(**)",
+      "Grep(**)",
       "WebSearch",
-      "WebFetch"
+      "WebFetch",
+      "Bash(*)"
     ]
   }
 }
