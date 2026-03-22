@@ -1,4 +1,4 @@
-# Nightcrawler
+# AstroNightcrawler
 
 A browser-based application for planning and executing imaging sequences with a remote-controlled telescope. Draw a path on an interactive star map, and the telescope follows it point by point, capturing images at each position. The resulting frames can be assembled into a video.
 
