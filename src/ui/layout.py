@@ -19,7 +19,7 @@ _HEAD_CSS = (
     "<style>"
     "body{margin:0;overflow:hidden}"
     " .map-container{flex:1;position:relative;"
-    "background:#0a0a19;min-height:0}"
+    "background:#0a0a19;min-height:0;overflow:hidden}"
     "</style>"
 )
 
@@ -38,8 +38,12 @@ def create_layout() -> None:
         capture_view.render()
         with ui.element("div").classes("map-container"):
             ui.label(
-                "Star map \u2014 coming soon",
-            ).classes("text-grey-6 absolute-center")
+                "Star map \u2014 install Stellarium Web Engine to enable",
+            ).classes(
+                "text-grey-6"
+                " absolute-center"
+                " text-center"
+            )
         panel = BottomPanelComponent(state)
         panel.render()
 
