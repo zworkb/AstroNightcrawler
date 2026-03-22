@@ -116,6 +116,12 @@ class ToolbarComponent:
         ).props("flat dense")
         load_btn.tooltip("Load")
 
+        ekos_btn = ui.button(
+            icon="file_download",
+            on_click=self._on_ekos_export,
+        ).props("flat dense")
+        ekos_btn.tooltip("Export EKOS Sequence")
+
     def _render_action_tools(self) -> None:
         """Render the start-capture button."""
         btn = ui.button(
@@ -125,6 +131,21 @@ class ToolbarComponent:
             color="green",
         )
         btn.tooltip("Start Capture Sequence")
+
+    async def _on_ekos_export(self) -> None:
+        """Export capture sequence as EKOS XML and trigger download."""
+        from src.export.ekos import export_sequence
+
+        self.state.update_capture_points()
+
+        if len(self.state.project.capture_points) < 2:
+            ui.notify("Need at least 2 capture points", type="warning")
+            return
+
+        tmp = Path(tempfile.mktemp(suffix=".esq"))
+        export_sequence(self.state.project, tmp)
+        ui.download(tmp)
+        ui.notify("EKOS sequence exported", type="positive")
 
     async def _on_save(self) -> None:
         """Save the project to a temp file and trigger download."""
