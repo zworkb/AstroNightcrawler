@@ -46,7 +46,9 @@ class AppState:
     last_camera: dict[str, float] = field(default_factory=lambda: {
         "canvas_width": 800, "canvas_height": 600,
         "yaw": 0.0, "pitch": 0.0, "fov": 60.0,
-        "observer_lat": 0.0, "observer_lon": 0.0, "observer_utc": 0.0,
+        "observer_lat": settings.observer_lat,
+        "observer_lon": settings.observer_lon,
+        "observer_utc": 0.0,
     })
 
     def update_capture_points(self) -> None:

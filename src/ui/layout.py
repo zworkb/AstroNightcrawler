@@ -69,6 +69,10 @@ def create_layout() -> None:
             f" (e) => emitEvent('{evt}', e.detail));"
             for evt in events
         )
+        from src.config import settings as cfg
+        obs_lat = cfg.observer_lat
+        obs_lon = cfg.observer_lon
+
         ui.add_body_html(f"""<script>
             (async () => {{
                 // Wait for DOM to be ready
@@ -79,6 +83,8 @@ def create_layout() -> None:
                         '/static/stellarium/stellarium-web-engine.js',
                         '/skydata/'
                     );
+                    // Set observer location from server config
+                    window.stelBridge.setObserver({obs_lat}, {obs_lon});
                 }} catch(e) {{
                     console.warn('Stellarium init failed:', e);
                 }}

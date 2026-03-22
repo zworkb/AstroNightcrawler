@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     output_dir: str = "./output"
     indi_host: str = "localhost"
     indi_port: int = 7624
+    observer_lat: float = 48.2  # Vienna default
+    observer_lon: float = 16.4
+    observer_elevation: float = 200.0
 
     model_config = {"env_prefix": "NC_", "env_file": ".env"}
 
