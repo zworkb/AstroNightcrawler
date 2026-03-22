@@ -205,11 +205,17 @@ class BottomPanelComponent:
             async def on_connect() -> None:
                 host = host_input.value or "localhost"
                 port = int(port_input.value or 7624)
-                await self.state.indi_client.connect(host, port)
-                status_label.text = "Connected"
-                status_label.classes(
-                    remove="text-red", add="text-green",
-                )
+                try:
+                    await self.state.indi_client.connect(host, port)
+                    status_label.text = "Connected"
+                    status_label.classes(
+                        remove="text-red", add="text-green",
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    status_label.text = f"Failed: {exc}"
+                    status_label.classes(
+                        remove="text-green", add="text-red",
+                    )
 
             ui.button(
                 "Connect", icon="power",
