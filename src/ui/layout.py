@@ -151,10 +151,20 @@ async def _start_capture(
         state: Shared application state.
         capture_view: Capture view to show progress.
     """
-    controller = state.start_capture()
-    capture_view.start(controller)
     try:
+        controller = state.start_capture()
+        logging.getLogger("capture").info(
+            "Starting capture: %d points, client=%s",
+            len(controller.project.capture_points),
+            type(state.indi_client).__name__,
+        )
+        capture_view.start(controller)
         await controller.run()
+    except Exception as exc:  # noqa: BLE001
+        logging.getLogger("capture").error(
+            "Capture failed: %s: %s", type(exc).__name__, exc,
+        )
+        ui.notify(f"Capture error: {exc}", type="negative")
     finally:
         capture_view.stop()
 
