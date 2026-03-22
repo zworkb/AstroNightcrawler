@@ -88,7 +88,7 @@ window.pathOverlayBridge = (() => {
         el.setAttribute("xmlns", ns);
         el.style.cssText =
             "position:absolute;top:0;left:0;width:100%;height:100%;" +
-            "pointer-events:all;z-index:5;";
+            "pointer-events:none;z-index:5;";
         // Ensure parent is positioned so absolute child works.
         parent.style.position = "relative";
         parent.appendChild(el);
@@ -174,14 +174,18 @@ window.pathOverlayBridge = (() => {
     function buildPathD() {
         if (controlPoints.length < 2) return "";
 
+        // Use pre-computed screen positions (sx, sy) from Python.
         const pts = controlPoints.map((cp) => {
-            const s = toScreen(cp.ra, cp.dec);
-            const hIn = cp.handleIn ? toScreen(cp.handleIn.ra, cp.handleIn.dec) : s;
-            const hOut = cp.handleOut ? toScreen(cp.handleOut.ra, cp.handleOut.dec) : s;
+            const s = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
+            const hIn = cp.handleIn
+                ? ((cp.handleIn.sx != null) ? {x: cp.handleIn.sx, y: cp.handleIn.sy} : toScreen(cp.handleIn.ra, cp.handleIn.dec))
+                : s;
+            const hOut = cp.handleOut
+                ? ((cp.handleOut.sx != null) ? {x: cp.handleOut.sx, y: cp.handleOut.sy} : toScreen(cp.handleOut.ra, cp.handleOut.dec))
+                : s;
             return { s, hIn, hOut };
         });
 
-        // Abort if any projection failed.
         if (pts.some((p) => !p.s || !p.hIn || !p.hOut)) return "";
 
         let d = `M ${pts[0].s.x} ${pts[0].s.y}`;
@@ -219,12 +223,13 @@ window.pathOverlayBridge = (() => {
      */
     function renderHandles() {
         for (const cp of controlPoints) {
-            const anchor = toScreen(cp.ra, cp.dec);
+            const anchor = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
             if (!anchor) continue;
 
             for (const hKey of ["handleIn", "handleOut"]) {
                 if (!cp[hKey]) continue;
-                const h = toScreen(cp[hKey].ra, cp[hKey].dec);
+                const hd = cp[hKey];
+                const h = (hd.sx != null) ? {x: hd.sx, y: hd.sy} : toScreen(hd.ra, hd.dec);
                 if (!h) continue;
 
                 // Line from control point to handle.
@@ -259,7 +264,7 @@ window.pathOverlayBridge = (() => {
     function renderCapturePoints() {
         for (let i = 0; i < capturePoints.length; i++) {
             const cp = capturePoints[i];
-            const s = toScreen(cp.ra, cp.dec);
+            const s = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
             if (!s) continue;
 
             const circle = svgEl("circle", {
@@ -281,7 +286,7 @@ window.pathOverlayBridge = (() => {
     function renderControlPointDots() {
         for (let i = 0; i < controlPoints.length; i++) {
             const cp = controlPoints[i];
-            const s = toScreen(cp.ra, cp.dec);
+            const s = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
             if (!s) continue;
 
             const circle = svgEl("circle", {
@@ -306,7 +311,7 @@ window.pathOverlayBridge = (() => {
     function renderHighlight(index) {
         if (index < 0 || index >= capturePoints.length) return;
         const cp = capturePoints[index];
-        const s = toScreen(cp.ra, cp.dec);
+        const s = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
         if (!s) return;
 
         const ring = svgEl("circle", {
@@ -578,6 +583,11 @@ window.pathOverlayBridge = (() => {
             dragIndex = null;
             freehandActive = false;
             freehandPoints = [];
+            // In draw mode, let clicks pass through to the engine
+            if (svg) {
+                svg.style.pointerEvents =
+                    (mode === "draw") ? "none" : "all";
+            }
         },
 
         /**

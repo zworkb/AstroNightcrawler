@@ -47,6 +47,11 @@ class AppState:
         default_factory=MockINDIClient,
     )
     undo_stack: UndoStack = field(default_factory=UndoStack)
+    current_mode: str = "draw"
+    last_camera: dict[str, float] = field(default_factory=lambda: {
+        "canvas_width": 800, "canvas_height": 600,
+        "yaw": 0.0, "pitch": 0.0, "fov": 60.0,
+    })
 
     def update_capture_points(self) -> None:
         """Re-sample the spline path and rebuild capture points.

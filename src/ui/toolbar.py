@@ -164,14 +164,17 @@ class ToolbarComponent:
         return self.callbacks.get(name, lambda: None)
 
     def _mode_action(self, name: str) -> Callable[[], None]:
-        """Return a callback that sets the JS overlay mode."""
+        """Return a callback that sets the drawing mode."""
         mode = _MODE_MAP.get(name)
         if mode is None:
             return lambda: None
 
         def _set_mode() -> None:
+            self.state.current_mode = mode
+            is_draw = mode == "draw"
             ui.run_javascript(
-                f"window.pathOverlayBridge?.setMode('{mode}')"
+                f"window.stelBridge?.setDrawMode({str(is_draw).lower()});"
+                f"window.pathOverlayBridge?.setMode('{mode}');"
             )
 
         return _set_mode

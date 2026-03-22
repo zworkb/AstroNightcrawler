@@ -19,6 +19,9 @@ window.stelBridge = (() => {
     /** @type {HTMLDivElement|null} Small overlay showing RA/Dec under cursor. */
     let coordOverlay = null;
 
+    /** @type {boolean} When true, clicks are captured for drawing instead of panning. */
+    let drawModeActive = false;
+
     // ------------------------------------------------------------------
     // Internal helpers
     // ------------------------------------------------------------------
@@ -51,56 +54,60 @@ window.stelBridge = (() => {
     }
 
     /**
-     * Convert screen pixel coordinates to RA/Dec via the engine.
-     * @param {number} x - X pixel coordinate relative to the canvas.
-     * @param {number} y - Y pixel coordinate relative to the canvas.
-     * @returns {{ra: number, dec: number}|null} Equatorial coordinates or null.
+     * Get the current camera state (center, FOV, canvas size).
+     * @returns {object|null} Camera state or null if engine not ready.
      */
-    function pixelToRaDec(x, y) {
-        if (!engine) return null;
+    function getCameraState() {
+        if (!engine || !engine.core) return null;
         try {
-            const world = engine.core.screenToWorld([x, y]);
-            if (!world) return null;
-            return { ra: world[0], dec: world[1] };
+            const canvas = container?.querySelector("canvas");
+            return {
+                fov: engine.core.fov * (180 / Math.PI),
+                yaw: engine.core.observer.yaw * (180 / Math.PI),
+                pitch: engine.core.observer.pitch * (180 / Math.PI),
+                canvas_width: canvas?.width || 0,
+                canvas_height: canvas?.height || 0,
+            };
         } catch (_) {
             return null;
         }
     }
 
     /**
-     * Attach mouse event listeners to the container.
+     * Attach mouse event listeners to the canvas element.
      * @param {HTMLElement} el - The container element.
      */
     function attachMouseEvents(el) {
-        el.addEventListener("click", (evt) => {
-            const rect = el.getBoundingClientRect();
-            const x = evt.clientX - rect.left;
-            const y = evt.clientY - rect.top;
-            const coords = pixelToRaDec(x, y);
-            if (coords) {
+        const canvas = el.querySelector("canvas");
+        if (!canvas) {
+            console.warn("stelBridge: no canvas found in container");
+            return;
+        }
+
+        canvas.addEventListener("click", (evt) => {
+            // Only handle clicks when drawing mode is active
+            if (!drawModeActive) return;
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.round(evt.clientX - rect.left);
+            const y = Math.round(evt.clientY - rect.top);
+            const cam = getCameraState();
+            if (cam) {
+                console.log("stelBridge: draw click at", x, y);
                 el.dispatchEvent(
                     new CustomEvent("map_click", {
-                        detail: { ra: coords.ra, dec: coords.dec, x, y },
+                        bubbles: true,
+                        detail: { x, y, ...cam },
                     })
                 );
             }
         });
 
-        el.addEventListener("mousemove", (evt) => {
-            const rect = el.getBoundingClientRect();
-            const x = evt.clientX - rect.left;
-            const y = evt.clientY - rect.top;
-            const coords = pixelToRaDec(x, y);
-            if (coords) {
-                el.dispatchEvent(
-                    new CustomEvent("map_mousemove", {
-                        detail: { ra: coords.ra, dec: coords.dec, x, y },
-                    })
-                );
-                const overlay = ensureOverlay(el);
-                overlay.textContent =
-                    "RA: " + fmtDeg(coords.ra) + " | Dec: " + fmtDeg(coords.dec);
-            }
+        canvas.addEventListener("mousemove", (evt) => {
+            const rect = canvas.getBoundingClientRect();
+            const x = Math.round(evt.clientX - rect.left);
+            const y = Math.round(evt.clientY - rect.top);
+            const overlay = ensureOverlay(el);
+            overlay.textContent = `Pixel: ${x}, ${y}`;
         });
     }
 
@@ -181,30 +188,47 @@ window.stelBridge = (() => {
         },
 
         /**
+         * Get the current camera state for Python-side projection.
+         * @returns {object|null} {fov, yaw, pitch, canvas_width, canvas_height}
+         */
+        getCameraState() {
+            return getCameraState();
+        },
+
+        /**
+         * Toggle draw mode. In draw mode, clicks are captured for
+         * point placement. In pan mode (default), Stellarium handles
+         * all mouse interaction.
+         * @param {boolean} active - True to enable draw mode.
+         */
+        setDrawMode(active) {
+            drawModeActive = active;
+            console.log("stelBridge: drawMode =", active);
+        },
+
+        /**
          * Convert screen pixel coordinates to equatorial RA/Dec.
+         * NOTE: This is a placeholder — actual conversion is done in Python
+         * via astropy using the camera state. Returns null for now.
          * @param {number} x - X pixel coordinate.
          * @param {number} y - Y pixel coordinate.
          * @returns {{ra: number, dec: number}|null}
          */
         screenToWorld(x, y) {
-            return pixelToRaDec(x, y);
+            // Placeholder — Python handles this via astropy
+            return null;
         },
 
         /**
          * Convert equatorial RA/Dec to screen pixel coordinates.
+         * NOTE: This is a placeholder — actual conversion is done in Python.
          * @param {number} ra  - Right ascension in degrees.
          * @param {number} dec - Declination in degrees.
          * @returns {{x: number, y: number}|null}
          */
         worldToScreen(ra, dec) {
-            if (!engine) return null;
-            try {
-                const pos = engine.core.worldToScreen([ra, dec]);
-                if (!pos) return null;
-                return { x: pos[0], y: pos[1] };
-            } catch (_) {
-                return null;
-            }
+            // Placeholder — Python handles this via astropy
+            return null;
         },
 
         /**
