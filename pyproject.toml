@@ -47,5 +47,5 @@ strict = true
 warn_return_any = true
 
 [[tool.mypy.overrides]]
-module = ["astropy.*", "numpy.*"]
+module = ["astropy.*", "numpy.*", "nicegui.*"]
 ignore_missing_imports = true
