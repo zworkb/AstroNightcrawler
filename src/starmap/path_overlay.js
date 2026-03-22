@@ -41,6 +41,8 @@ window.pathOverlayBridge = (() => {
     let dragging = false;
     /** @type {number|null} */
     let dragIndex = null;
+    /** @type {string|null} "in" or "out" when dragging a handle. */
+    let dragHandleType = null;
 
     // Freehand state
     /** @type {boolean} */
@@ -362,12 +364,17 @@ window.pathOverlayBridge = (() => {
                 );
 
                 // Handle dot.
+                const hType = hKey === "handleIn" ? "in" : "out";
+                const cpIdx = controlPoints.indexOf(cp);
                 svg.appendChild(
                     svgEl("circle", {
                         cx: String(h.x),
                         cy: String(h.y),
                         r: "3",
                         fill: "rgba(237,137,54,0.5)",
+                        "data-handle-point-index": String(cpIdx),
+                        "data-handle-type": hType,
+                        style: "cursor:pointer;pointer-events:all;",
                     })
                 );
             }
@@ -466,6 +473,19 @@ window.pathOverlayBridge = (() => {
         if (!(target instanceof SVGElement)) return null;
         const attr = target.getAttribute("data-point-index");
         return attr !== null ? parseInt(attr, 10) : null;
+    }
+
+    /**
+     * Find the handle info under a click (if any).
+     * @param {EventTarget} target
+     * @returns {{pointIndex: number, handleType: string}|null}
+     */
+    function handleIndexFromTarget(target) {
+        if (!(target instanceof SVGElement)) return null;
+        const attr = target.getAttribute("data-handle-point-index");
+        if (attr === null) return null;
+        const hType = target.getAttribute("data-handle-type");
+        return { pointIndex: parseInt(attr, 10), handleType: hType };
     }
 
     /**
@@ -593,6 +613,15 @@ window.pathOverlayBridge = (() => {
                 if (idx !== null) {
                     dragging = true;
                     dragIndex = idx;
+                    dragHandleType = null;
+                    evt.preventDefault();
+                    return;
+                }
+                const hIdx = handleIndexFromTarget(evt.target);
+                if (hIdx !== null) {
+                    dragging = true;
+                    dragIndex = hIdx.pointIndex;
+                    dragHandleType = hIdx.handleType;
                     evt.preventDefault();
                 }
                 return;
@@ -612,14 +641,22 @@ window.pathOverlayBridge = (() => {
             const pos = mousePos(evt);
 
             if (mode === "move" && dragging && dragIndex !== null) {
-                // Live visual feedback — update the control point screen
-                // position directly on the SVG dot being dragged.
-                const dot = svg.querySelector(
-                    `circle[data-point-index="${dragIndex}"]`
-                );
-                if (dot) {
-                    dot.setAttribute("cx", String(pos.x));
-                    dot.setAttribute("cy", String(pos.y));
+                if (dragHandleType) {
+                    const sel = `circle[data-handle-point-index="${dragIndex}"]` +
+                        `[data-handle-type="${dragHandleType}"]`;
+                    const dot = svg.querySelector(sel);
+                    if (dot) {
+                        dot.setAttribute("cx", String(pos.x));
+                        dot.setAttribute("cy", String(pos.y));
+                    }
+                } else {
+                    const dot = svg.querySelector(
+                        `circle[data-point-index="${dragIndex}"]`
+                    );
+                    if (dot) {
+                        dot.setAttribute("cx", String(pos.x));
+                        dot.setAttribute("cy", String(pos.y));
+                    }
                 }
                 evt.preventDefault();
                 return;
@@ -638,7 +675,18 @@ window.pathOverlayBridge = (() => {
 
             if (mode === "move" && dragging && dragIndex !== null) {
                 const coords = toWorld(pos.x, pos.y);
-                if (coords) {
+                if (coords && dragHandleType) {
+                    container.dispatchEvent(
+                        new CustomEvent("path_handle_moved", {
+                            detail: {
+                                pointIndex: dragIndex,
+                                handleType: dragHandleType,
+                                ra: coords.ra,
+                                dec: coords.dec,
+                            },
+                        })
+                    );
+                } else if (coords) {
                     container.dispatchEvent(
                         new CustomEvent("path_point_moved", {
                             detail: {
@@ -651,6 +699,7 @@ window.pathOverlayBridge = (() => {
                 }
                 dragging = false;
                 dragIndex = null;
+                dragHandleType = null;
                 return;
             }
 
@@ -711,6 +760,7 @@ window.pathOverlayBridge = (() => {
             mode = newMode;
             dragging = false;
             dragIndex = null;
+            dragHandleType = null;
             freehandActive = false;
             freehandPoints = [];
             // Pan & Draw: SVG transparent (clicks go to canvas/engine)

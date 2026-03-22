@@ -48,6 +48,7 @@ def create_layout() -> None:
             "path_move_point", "path_point_moved",
             "path_remove_point", "path_split",
             "path_add_point_on_segment",
+            "path_handle_moved",
         ]
         listeners = "\n".join(
             f"el.addEventListener('{evt}',"

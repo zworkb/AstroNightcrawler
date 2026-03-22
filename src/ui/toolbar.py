@@ -157,8 +157,10 @@ class ToolbarComponent:
         content = event.content.read().decode()
         self.state.load_project_from_json(content)
         dialog.close()
-        refresh_overlay(self.state)
         ui.notify("Project loaded", type="positive")
+        # Defer overlay refresh so the dialog fully closes and the
+        # client is ready to execute JavaScript on the star-map canvas.
+        ui.timer(0.1, lambda: refresh_overlay(self.state), once=True)
 
     def _action(self, name: str) -> Callable[[], None]:
         """Return the callback for *name*, or a no-op."""
