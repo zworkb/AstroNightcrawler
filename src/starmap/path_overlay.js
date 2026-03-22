@@ -689,10 +689,12 @@ window.pathOverlayBridge = (() => {
 
             // Continuously re-render so points follow camera movement.
             let lastCam = "";
+            window.addEventListener("resize", () => render());
+
             setInterval(() => {
                 const cam = window.stelBridge?.getCameraState();
                 if (!cam) return;
-                const key = `${cam.yaw},${cam.pitch},${cam.fov}`;
+                const key = `${cam.yaw},${cam.pitch},${cam.fov},${cam.canvas_width},${cam.canvas_height}`;
                 if (key !== lastCam) {
                     lastCam = key;
                     render();
