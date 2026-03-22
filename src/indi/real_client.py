@@ -27,24 +27,41 @@ _STDERR_SUPPRESSED = False
 
 
 def _suppress_indi_stderr() -> None:
-    """Redirect stderr to filter out PyIndi C-library spam.
+    """Replace fd 2 with a pipe that filters out PyIndi C-library spam.
 
-    PyIndi's C layer prints "No IText", "Dispatch command error"
-    etc. directly to fd 2. We redirect fd 2 to /dev/null once.
-    Python's sys.stderr (used by logging) is not affected.
+    Keeps real error messages, suppresses known noise like
+    "No IText", "Dispatch command error".
     """
     global _STDERR_SUPPRESSED  # noqa: PLW0603
     if _STDERR_SUPPRESSED:
         return
     import os
-    import sys
-    # Save Python's stderr before redirect
-    sys.stderr = sys.__stderr__
-    devnull = os.open(os.devnull, os.O_WRONLY)
-    os.dup2(devnull, 2)
-    os.close(devnull)
+    import threading
+
+    _SUPPRESS_PATTERNS = (
+        b"No IText",
+        b"No INumber",
+        b"No ISwitch",
+        b"Dispatch command error",
+        b"Could not find property",
+    )
+
+    read_fd, write_fd = os.pipe()
+    old_fd = os.dup(2)
+    os.dup2(write_fd, 2)
+    os.close(write_fd)
+
+    def _filter() -> None:
+        with os.fdopen(read_fd, "rb") as reader:
+            for line in reader:
+                if any(p in line for p in _SUPPRESS_PATTERNS):
+                    continue
+                os.write(old_fd, line)
+
+    t = threading.Thread(target=_filter, daemon=True)
+    t.start()
     _STDERR_SUPPRESSED = True
-    logger.info("PyIndi stderr spam suppressed")
+    logger.info("PyIndi stderr filter active")
 _PROPERTY_POLL = 0.5
 
 
