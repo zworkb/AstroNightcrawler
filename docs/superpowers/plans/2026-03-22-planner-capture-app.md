@@ -24,10 +24,12 @@
 ```
 sequence-planner/
 ├── .gitignore
+├── .env                              # Default config (SEQ_HOST, SEQ_PORT, etc.)
 ├── pyproject.toml                    # Project config, dependencies, ruff/mypy config
 ├── src/
 │   ├── __init__.py
-│   ├── main.py                       # NiceGUI app entry point
+│   ├── main.py                       # NiceGUI app entry point (FastAPI/uvicorn)
+│   ├── config.py                     # Pydantic BaseSettings: env vars + .env file
 │   ├── app_state.py                  # Application state dataclass + actions
 │   ├── models/
 │   │   ├── __init__.py
@@ -78,7 +80,7 @@ sequence-planner/
 
 **Known limitations (documented in code):**
 - Spline math uses flat Euclidean coordinates (no `cos(dec)` correction). Accurate for paths <15°, inaccurate for large angular distances.
-- NiceGUI binds to `0.0.0.0:8090` by default — intentional for network access (tablet in observatory). Configurable via `--host`/`--port` args.
+- Default bind `0.0.0.0:8090` — intentional for network access (tablet in observatory). Configurable via `SEQ_HOST`/`SEQ_PORT` env vars or `.env` file.
 
 ---
 
@@ -101,6 +103,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "pydantic>=2.0",
+    "pydantic-settings>=2.0",
     "astropy>=6.0",
 ]
 
@@ -487,16 +490,50 @@ git commit -m "feat: add capture controller with pause/resume, retry, and safety
 - [ ] **Step 1: Create app state dataclass**
 
 `src/app_state.py`:
-- `AppState` dataclass holding: `project: Project`, `indi_client: INDIClient`, `undo_stack: UndoStack`, `output_dir: Path`
+- `AppState` dataclass holding: `project: Project`, `indi_client: INDIClient`, `undo_stack: UndoStack`
+- Reads `output_dir`, `indi_host`, `indi_port` from `settings` (config.py)
 - Methods: `update_capture_points()`, `save_project(path)`, `load_project(path)`, `start_capture()` (preserves existing captured points when resuming)
 - Uses dependency injection for INDI client (mock by default, real when available)
 
 - [ ] **Step 2: Create main entry point with FastAPI/uvicorn support**
 
+`src/config.py` — Pydantic `BaseSettings` for all configurable values, loaded from env vars and `.env` file:
+
+```python
+# src/config.py
+from pydantic_settings import BaseSettings
+
+
+class Settings(BaseSettings):
+    """Application settings, configurable via environment variables or .env file."""
+
+    host: str = "0.0.0.0"
+    port: int = 8090
+    output_dir: str = "./output"
+    indi_host: str = "localhost"
+    indi_port: int = 7624
+
+    model_config = {"env_prefix": "SEQ_", "env_file": ".env"}
+
+
+settings = Settings()
+```
+
+All settings are overridable via `SEQ_`-prefixed env vars (e.g., `SEQ_PORT=9000`) or a `.env` file in the project root. Default `.env` shipped with the project:
+
+```env
+# .env
+SEQ_HOST=0.0.0.0
+SEQ_PORT=8090
+SEQ_OUTPUT_DIR=./output
+SEQ_INDI_HOST=localhost
+SEQ_INDI_PORT=7624
+```
+
 `src/main.py`:
 - Create explicit FastAPI app instance, mount NiceGUI on it via `ui.run_with(app)`
-- Export `app` at module level so it can be started as a service: `uvicorn src.main:app --host 0.0.0.0 --port 8090`
-- Also support direct execution: `python -m src.main` (calls `uvicorn.run()` with configurable host/port via argparse or env vars)
+- Export `app` at module level so it can be started as a service: `uvicorn src.main:app`
+- `main()` reads `settings.host`/`settings.port` for uvicorn startup
 - NiceGUI pages registered with `@ui.page("/")`
 
 ```python
@@ -504,6 +541,7 @@ git commit -m "feat: add capture controller with pause/resume, retry, and safety
 from fastapi import FastAPI
 from nicegui import ui
 
+from src.config import settings
 from src.ui.layout import create_layout
 
 app = FastAPI(title="Sequence Planner")
@@ -520,7 +558,7 @@ ui.run_with(app, title="Sequence Planner", dark=True)
 def main() -> None:
     """Entry point for `sequence-planner` console script."""
     import uvicorn
-    uvicorn.run("src.main:app", host="0.0.0.0", port=8090, reload=False)
+    uvicorn.run("src.main:app", host=settings.host, port=settings.port, reload=False)
 
 
 if __name__ == "__main__":
