@@ -35,7 +35,7 @@ class BottomPanelComponent:
         with self._expansion, ui.row().classes("w-full gap-4 p-2"):
             self._render_path_settings()
             ui.separator().props("vertical")
-            self._render_capture_table()
+            self._render_capture_table()  # type: ignore[call-arg]
             ui.separator().props("vertical")
             self._render_indi_section()
 
@@ -175,7 +175,7 @@ class BottomPanelComponent:
 
     def _refresh_table(self) -> None:
         """Refresh the capture table content."""
-        self._render_capture_table.refresh()  # type: ignore[attr-defined]
+        self._render_capture_table.refresh()
 
     def _render_indi_section(self) -> None:
         """Render INDI connection controls."""
