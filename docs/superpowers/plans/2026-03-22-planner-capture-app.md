@@ -78,7 +78,7 @@ sequence-planner/
 
 **Known limitations (documented in code):**
 - Spline math uses flat Euclidean coordinates (no `cos(dec)` correction). Accurate for paths <15°, inaccurate for large angular distances.
-- NiceGUI binds to `0.0.0.0:8080` by default — intentional for network access (tablet in observatory). Configurable via `--host`/`--port` args.
+- NiceGUI binds to `0.0.0.0:8090` by default — intentional for network access (tablet in observatory). Configurable via `--host`/`--port` args.
 
 ---
 
@@ -495,7 +495,7 @@ git commit -m "feat: add capture controller with pause/resume, retry, and safety
 
 `src/main.py`:
 - Create explicit FastAPI app instance, mount NiceGUI on it via `ui.run_with(app)`
-- Export `app` at module level so it can be started as a service: `uvicorn src.main:app --host 0.0.0.0 --port 8080`
+- Export `app` at module level so it can be started as a service: `uvicorn src.main:app --host 0.0.0.0 --port 8090`
 - Also support direct execution: `python -m src.main` (calls `uvicorn.run()` with configurable host/port via argparse or env vars)
 - NiceGUI pages registered with `@ui.page("/")`
 
@@ -520,7 +520,7 @@ ui.run_with(app, title="Sequence Planner", dark=True)
 def main() -> None:
     """Entry point for `sequence-planner` console script."""
     import uvicorn
-    uvicorn.run("src.main:app", host="0.0.0.0", port=8080, reload=False)
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8090, reload=False)
 
 
 if __name__ == "__main__":
