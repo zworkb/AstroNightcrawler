@@ -114,39 +114,73 @@ window.pathOverlayBridge = (() => {
      */
     let _logCounter = 0;
 
+    /**
+     * Stereographic projection matching Stellarium Web Engine exactly.
+     *
+     * Engine formula (proj_stereographic.c):
+     *   1. Convert direction to unit vector (x, y, z)
+     *   2. Project: x' = x / (0.5 * (1 - z)),  y' = y / (0.5 * (1 - z))
+     *   3. Scale by perspective matrix using fovy2 = 2*atan(2*tan(fov/4))
+     */
     function toScreen(az, alt) {
         const cam = window.stelBridge?.getCameraState();
         if (!cam || !cam.canvas_width) return null;
 
         const D = Math.PI / 180;
+        const fovRad = cam.fov * D;
+
+        // Direction vector of the point in the camera's local frame.
+        // Camera looks along -Z, X is right, Y is up.
         const az0 = cam.yaw * D;
         const alt0 = cam.pitch * D;
         const azR = az * D;
         const altR = alt * D;
 
-        const cosAlt = Math.cos(altR);
-        const sinAlt = Math.sin(altR);
-        const cosAlt0 = Math.cos(alt0);
-        const sinAlt0 = Math.sin(alt0);
-        const daz = azR - az0;
-        const cosDaz = Math.cos(daz);
+        // Convert both directions to 3D unit vectors
+        const cx = Math.cos(altR) * Math.sin(azR);
+        const cy = Math.sin(altR);
+        const cz = Math.cos(altR) * Math.cos(azR);
 
-        const cosC = sinAlt0 * sinAlt + cosAlt0 * cosAlt * cosDaz;
-        if (cosC <= 0.01) return null;
+        const rx = Math.cos(alt0) * Math.sin(az0);
+        const ry = Math.sin(alt0);
+        const rz = Math.cos(alt0) * Math.cos(az0);
 
-        const k = 2.0 / (1.0 + cosC);
-        const px = k * cosAlt * Math.sin(daz);
-        const py = k * (cosAlt0 * sinAlt - sinAlt0 * cosAlt * cosDaz);
+        // Rotate point into camera frame (camera looks along ref direction)
+        // Camera right = perpendicular to ref in horizontal plane
+        // Camera up = perpendicular to ref and right
+        const rightX = Math.cos(az0);
+        const rightY = 0;
+        const rightZ = -Math.sin(az0);
 
-        const scale = cam.canvas_height / (cam.fov * D * 2);
-        const sx = cam.canvas_width / 2 + px * scale;
-        const sy = cam.canvas_height / 2 - py * scale;
+        const upX = -Math.sin(alt0) * Math.sin(az0);
+        const upY = Math.cos(alt0);
+        const upZ = -Math.sin(alt0) * Math.cos(az0);
+
+        // Project point onto camera axes
+        const dx = cx * rightX + cy * rightY + cz * rightZ;
+        const dy = cx * upX + cy * upY + cz * upZ;
+        const dz = cx * rx + cy * ry + cz * rz;  // dot with forward
+
+        if (dz <= 0.01) return null;  // Behind camera
+
+        // Stereographic projection: x' = x / (0.5 * (1 - (-dz)))
+        // But we use the standard form: x' = 2 * dx / (1 + dz)
+        const oneOverH = 1.0 / (0.5 * (1.0 + dz));
+        const projX = dx * oneOverH;
+        const projY = dy * oneOverH;
+
+        // Scale using Stellarium's FOV formula: fovy2 = 2*atan(2*tan(fov/4))
+        const fovy2 = 2 * Math.atan(2 * Math.tan(fovRad / 4));
+        const scale = cam.canvas_height / (2 * Math.tan(fovy2 / 2));
+
+        const sx = cam.canvas_width / 2 + projX * scale;
+        const sy = cam.canvas_height / 2 - projY * scale;
 
         if (_logCounter++ < 20) {
             console.log(`toScreen(az=${az.toFixed(2)}, alt=${alt.toFixed(2)})` +
                 ` cam(yaw=${cam.yaw.toFixed(2)}, pitch=${cam.pitch.toFixed(2)},` +
                 ` fov=${cam.fov.toFixed(2)}, ${cam.canvas_width}x${cam.canvas_height})` +
-                ` → (${sx.toFixed(1)}, ${sy.toFixed(1)})`);
+                ` dz=${dz.toFixed(3)} → (${sx.toFixed(1)}, ${sy.toFixed(1)})`);
         }
 
         return { x: sx, y: sy };
@@ -163,27 +197,40 @@ window.pathOverlayBridge = (() => {
         if (!cam || !cam.canvas_width) return null;
 
         const D = Math.PI / 180;
+        const fovRad = cam.fov * D;
         const az0 = cam.yaw * D;
         const alt0 = cam.pitch * D;
 
-        const scale = cam.canvas_height / (cam.fov * D * 2);
-        const px = (x - cam.canvas_width / 2) / scale;
-        const py = -(y - cam.canvas_height / 2) / scale;
+        // Inverse of the FOV scaling
+        const fovy2 = 2 * Math.atan(2 * Math.tan(fovRad / 4));
+        const scale = cam.canvas_height / (2 * Math.tan(fovy2 / 2));
 
-        const rho = Math.sqrt(px * px + py * py);
-        if (rho === 0) return { ra: cam.yaw, dec: cam.pitch };
+        const projX = (x - cam.canvas_width / 2) / scale;
+        const projY = -(y - cam.canvas_height / 2) / scale;
 
-        const c = 2 * Math.atan(rho / 2);
-        const cosC = Math.cos(c);
-        const sinC = Math.sin(c);
-        const cosAlt0 = Math.cos(alt0);
-        const sinAlt0 = Math.sin(alt0);
+        // Inverse stereographic: from projected coords to camera-space direction
+        const lqq = 0.25 * (projX * projX + projY * projY);
+        const ifactor = 1.0 / (lqq + 1.0);
+        const dx = projX * ifactor;       // camera right
+        const dy = projY * ifactor;       // camera up
+        const dz = (1.0 - lqq) * ifactor; // camera forward (negated from Stellarium z)
 
-        const alt = Math.asin(cosC * sinAlt0 + py * sinC * cosAlt0 / rho);
-        const az = az0 + Math.atan2(
-            px * sinC,
-            rho * cosAlt0 * cosC - py * sinAlt0 * sinC,
-        );
+        // Rotate from camera frame back to world frame
+        const rightX = Math.cos(az0);
+        const rightZ = -Math.sin(az0);
+        const upX = -Math.sin(alt0) * Math.sin(az0);
+        const upY = Math.cos(alt0);
+        const upZ = -Math.sin(alt0) * Math.cos(az0);
+        const fwdX = Math.cos(alt0) * Math.sin(az0);
+        const fwdY = Math.sin(alt0);
+        const fwdZ = Math.cos(alt0) * Math.cos(az0);
+
+        const wx = dx * rightX + dy * upX + dz * fwdX;
+        const wy = dy * upY + dz * fwdY;
+        const wz = dx * rightZ + dy * upZ + dz * fwdZ;
+
+        const alt = Math.asin(Math.max(-1, Math.min(1, wy)));
+        const az = Math.atan2(wx, wz);
 
         const result = {
             ra: ((az / D) % 360 + 360) % 360,
