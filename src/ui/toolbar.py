@@ -2,13 +2,26 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 
 from nicegui import ui
 
+from src.models.project import SplinePath
+
 if TYPE_CHECKING:
     from src.app_state import AppState
+
+
+_MODE_MAP: dict[str, str] = {
+    "draw": "draw",
+    "freehand": "freehand",
+    "move": "move",
+    "add_point": "add_point",
+    "remove_point": "remove_point",
+    "split": "split",
+}
 
 
 class ToolbarComponent:
@@ -57,9 +70,10 @@ class ToolbarComponent:
             ("call_split", "Split"),
         ]
         for icon, tooltip in tools:
+            name = tooltip.lower().replace(" ", "_")
             btn = ui.button(
                 icon=icon,
-                on_click=self._action(tooltip.lower().replace(" ", "_")),
+                on_click=self._mode_action(name),
             ).props("flat dense")
             btn.tooltip(tooltip)
 
@@ -67,7 +81,7 @@ class ToolbarComponent:
         """Render undo/redo buttons."""
         undo_btn = ui.button(
             icon="undo",
-            on_click=self._action("undo"),
+            on_click=self._on_undo,
         ).props("flat dense")
         undo_btn.tooltip("Undo")
         undo_btn.bind_enabled_from(
@@ -77,7 +91,7 @@ class ToolbarComponent:
 
         redo_btn = ui.button(
             icon="redo",
-            on_click=self._action("redo"),
+            on_click=self._on_redo,
         ).props("flat dense")
         redo_btn.tooltip("Redo")
         redo_btn.bind_enabled_from(
@@ -112,3 +126,93 @@ class ToolbarComponent:
     def _action(self, name: str) -> Callable[[], None]:
         """Return the callback for *name*, or a no-op."""
         return self.callbacks.get(name, lambda: None)
+
+    def _mode_action(self, name: str) -> Callable[[], None]:
+        """Return a callback that sets the JS overlay mode."""
+        mode = _MODE_MAP.get(name)
+        if mode is None:
+            return lambda: None
+
+        def _set_mode() -> None:
+            ui.run_javascript(
+                f"window.pathOverlayBridge?.setMode('{mode}')"
+            )
+
+        return _set_mode
+
+    async def _on_undo(self) -> None:
+        """Undo the last action and refresh the overlay."""
+        snapshot = self.state.undo_stack.undo()
+        if snapshot is None:
+            return
+        path = SplinePath.model_validate_json(snapshot)
+        self.state.project.path = path
+        self.state.update_capture_points()
+        await _refresh_overlay(self.state)
+
+    async def _on_redo(self) -> None:
+        """Redo the last undone action and refresh the overlay."""
+        snapshot = self.state.undo_stack.redo()
+        if snapshot is None:
+            return
+        path = SplinePath.model_validate_json(snapshot)
+        self.state.project.path = path
+        self.state.update_capture_points()
+        await _refresh_overlay(self.state)
+
+
+async def _refresh_overlay(state: AppState) -> None:
+    """Serialize path data and push to the JS overlay.
+
+    Args:
+        state: Application state with current path and capture points.
+    """
+    cp_data = _serialize_control_points(state)
+    cap_data = _serialize_capture_points(state)
+    js = (
+        "window.pathOverlayBridge?.update("
+        f"{json.dumps(cp_data)}, {json.dumps(cap_data)})"
+    )
+    await ui.run_javascript(js)
+
+
+def _serialize_control_points(state: AppState) -> list[dict[str, object]]:
+    """Serialize control points for the JS overlay.
+
+    Args:
+        state: Application state.
+
+    Returns:
+        List of serialized control point dicts.
+    """
+    return [
+        {
+            "ra": cp.ra,
+            "dec": cp.dec,
+            "label": cp.label,
+            "handleIn": (
+                {"ra": cp.handle_in.ra, "dec": cp.handle_in.dec}
+                if cp.handle_in else None
+            ),
+            "handleOut": (
+                {"ra": cp.handle_out.ra, "dec": cp.handle_out.dec}
+                if cp.handle_out else None
+            ),
+        }
+        for cp in state.project.path.control_points
+    ]
+
+
+def _serialize_capture_points(state: AppState) -> list[dict[str, object]]:
+    """Serialize capture points for the JS overlay.
+
+    Args:
+        state: Application state.
+
+    Returns:
+        List of serialized capture point dicts.
+    """
+    return [
+        {"ra": p.ra, "dec": p.dec, "index": p.index}
+        for p in state.project.capture_points
+    ]

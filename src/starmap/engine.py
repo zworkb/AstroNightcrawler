@@ -8,6 +8,7 @@ and observer settings.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Callable
 from pathlib import Path
 
 from nicegui import ui
@@ -27,7 +28,9 @@ class StarMap:
         await star_map.look_at(ra=83.63, dec=22.01, fov=5.0)
     """
 
-    def __init__(self, width: str = "100%", height: str = "600px") -> None:
+    def __init__(
+        self, width: str = "100%", height: str = "600px",
+    ) -> None:
         """Create the map container and inject the JS bridge.
 
         Args:
@@ -35,6 +38,9 @@ class StarMap:
             height: CSS height of the container.
         """
         self._container_id = f"starmap-{uuid.uuid4().hex[:8]}"
+        self._event_handlers: dict[
+            str, list[Callable[..., object]]
+        ] = {}
         self._inject_scripts()
         self._create_container(width, height)
 
@@ -43,18 +49,27 @@ class StarMap:
     # ------------------------------------------------------------------
 
     def _inject_scripts(self) -> None:
-        """Load bridge.js (and path_overlay.js if present) into the page."""
+        """Load bridge.js and path_overlay.js into the page."""
         bridge_src = _BRIDGE_JS.read_text(encoding="utf-8")
         ui.add_body_html(f"<script>\n{bridge_src}\n</script>")
 
         if _PATH_OVERLAY_JS.exists():
             overlay_src = _PATH_OVERLAY_JS.read_text(encoding="utf-8")
-            ui.add_body_html(f"<script>\n{overlay_src}\n</script>")
+            ui.add_body_html(
+                f"<script>\n{overlay_src}\n</script>",
+            )
 
-    def _create_container(self, width: str, height: str) -> None:
+    def _create_container(
+        self, width: str, height: str,
+    ) -> None:
         """Insert an HTML container div for the engine canvas."""
-        style = f"width:{width};height:{height};overflow:hidden;"
-        ui.html(f'<div id="{self._container_id}" style="{style}"></div>')
+        style = (
+            f"width:{width};height:{height};overflow:hidden;"
+        )
+        ui.html(
+            f'<div id="{self._container_id}" style="{style}">'
+            f"</div>",
+        )
 
     # ------------------------------------------------------------------
     # Public async interface
@@ -62,7 +77,9 @@ class StarMap:
 
     async def initialize(
         self,
-        wasm_url: str = "/static/stellarium/stellarium-web-engine.wasm",
+        wasm_url: str = (
+            "/static/stellarium/stellarium-web-engine.wasm"
+        ),
         skydata_url: str = "/static/skydata",
     ) -> None:
         """Initialise the Stellarium engine inside the container.
@@ -73,7 +90,8 @@ class StarMap:
         """
         js = (
             f"await window.stelBridge.initEngine("
-            f"'{self._container_id}', '{wasm_url}', '{skydata_url}')"
+            f"'{self._container_id}',"
+            f" '{wasm_url}', '{skydata_url}')"
         )
         await ui.run_javascript(js)
 
@@ -92,10 +110,15 @@ class StarMap:
             fov:      Target field-of-view in degrees.
             duration: Animation duration in seconds.
         """
-        js = f"window.stelBridge.lookAt({ra}, {dec}, {fov}, {duration})"
+        js = (
+            f"window.stelBridge.lookAt("
+            f"{ra}, {dec}, {fov}, {duration})"
+        )
         await ui.run_javascript(js)
 
-    async def set_observer(self, lat: float, lon: float) -> None:
+    async def set_observer(
+        self, lat: float, lon: float,
+    ) -> None:
         """Set the geographic observer location.
 
         Args:
@@ -111,6 +134,40 @@ class StarMap:
             "return window.stelBridge.getFieldOfView()"
         )
         return result
+
+    def on_map_event(
+        self,
+        event_name: str,
+        callback: Callable[..., object],
+    ) -> None:
+        """Register a Python callback for a JS CustomEvent.
+
+        Adds a JS event listener on the container element that
+        forwards the event detail to Python via ``ui.on``.
+
+        Args:
+            event_name: Name of the JS CustomEvent to listen for.
+            callback: Python function receiving the event detail.
+        """
+        if event_name not in self._event_handlers:
+            self._event_handlers[event_name] = []
+        self._event_handlers[event_name].append(callback)
+        ui.on(event_name, callback)
+        self._register_js_listener(event_name)
+
+    def _register_js_listener(self, event_name: str) -> None:
+        """Inject a JS listener that forwards events to NiceGUI.
+
+        Args:
+            event_name: The CustomEvent name to listen for.
+        """
+        js = (
+            f"document.getElementById('{self._container_id}')"
+            f"?.addEventListener('{event_name}', (e) => {{"
+            f"  emitEvent('{event_name}', e.detail);"
+            f"}});"
+        )
+        ui.run_javascript(js)
 
     @property
     def container_id(self) -> str:

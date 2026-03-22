@@ -24,18 +24,27 @@ class BottomPanelComponent:
             state: Shared application state.
         """
         self.state = state
+        self._expansion: ui.expansion | None = None
 
     def render(self) -> None:
         """Render the expansion panel with all sections."""
-        with ui.expansion(
+        self._expansion = ui.expansion(
             text=self._summary_text(),
             icon="tune",
-        ).classes("w-full bg-dark"), ui.row().classes("w-full gap-4 p-2"):
+        ).classes("w-full bg-dark")
+        with self._expansion, ui.row().classes("w-full gap-4 p-2"):
             self._render_path_settings()
             ui.separator().props("vertical")
             self._render_capture_table()
             ui.separator().props("vertical")
             self._render_indi_section()
+
+    def refresh(self) -> None:
+        """Refresh the summary text and capture table."""
+        if self._expansion is not None:
+            self._expansion._props["label"] = self._summary_text()
+            self._expansion.update()
+        self._refresh_table()
 
     def _summary_text(self) -> str:
         """Build the collapsed summary string."""
@@ -67,49 +76,70 @@ class BottomPanelComponent:
         cs = self.state.project.capture_settings
         with ui.column().classes("gap-2"):
             ui.label("Path Settings").classes("text-weight-bold")
-            ui.number(
-                "Spacing (\u00b0)", value=cs.point_spacing_deg,
-                min=0.01, max=10.0, step=0.1,
-                on_change=lambda e: setattr(
-                    cs, "point_spacing_deg", e.value,
-                ),
-            ).classes("w-32")
-            ui.number(
-                "Exposure (s)", value=cs.exposure_seconds,
-                min=0.1, max=3600.0, step=1.0,
-                on_change=lambda e: setattr(
-                    cs, "exposure_seconds", e.value,
-                ),
-            ).classes("w-32")
-            ui.number(
-                "Exposures/pt", value=cs.exposures_per_point,
-                min=1, max=100, step=1,
-                on_change=lambda e: setattr(
-                    cs, "exposures_per_point", int(e.value),
-                ),
-            ).classes("w-32")
-            ui.number(
-                "Gain", value=cs.gain,
-                min=0, max=1000, step=1,
-                on_change=lambda e: setattr(
-                    cs, "gain", int(e.value),
-                ),
-            ).classes("w-32")
-            ui.number(
-                "Offset", value=cs.offset,
-                min=0, max=1000, step=1,
-                on_change=lambda e: setattr(
-                    cs, "offset", int(e.value),
-                ),
-            ).classes("w-32")
-            ui.number(
-                "Binning", value=cs.binning,
-                min=1, max=4, step=1,
-                on_change=lambda e: setattr(
-                    cs, "binning", int(e.value),
-                ),
-            ).classes("w-32")
+            self._setting_number(
+                "Spacing (\u00b0)", cs.point_spacing_deg,
+                0.01, 10.0, 0.1, "point_spacing_deg",
+            )
+            self._setting_number(
+                "Exposure (s)", cs.exposure_seconds,
+                0.1, 3600.0, 1.0, "exposure_seconds",
+            )
+            self._setting_number(
+                "Exposures/pt", cs.exposures_per_point,
+                1, 100, 1, "exposures_per_point", as_int=True,
+            )
+            self._setting_number(
+                "Gain", cs.gain,
+                0, 1000, 1, "gain", as_int=True,
+            )
+            self._setting_number(
+                "Offset", cs.offset,
+                0, 1000, 1, "offset", as_int=True,
+            )
+            self._setting_number(
+                "Binning", cs.binning,
+                1, 4, 1, "binning", as_int=True,
+            )
 
+    def _setting_number(
+        self,
+        label: str,
+        value: float | int,
+        min_val: float,
+        max_val: float,
+        step: float,
+        attr: str,
+        *,
+        as_int: bool = False,
+    ) -> None:
+        """Render a number input wired to a capture setting.
+
+        Args:
+            label: Display label.
+            value: Initial value.
+            min_val: Minimum allowed value.
+            max_val: Maximum allowed value.
+            step: Increment step.
+            attr: Attribute name on capture_settings.
+            as_int: Whether to cast the value to int.
+        """
+        cs = self.state.project.capture_settings
+
+        def _on_change(e: object, a: str = attr) -> None:
+            val = getattr(e, "value", None)
+            if val is None:
+                return
+            setattr(cs, a, int(val) if as_int else val)
+            self.state.update_capture_points()
+            self.refresh()
+
+        ui.number(
+            label, value=value,
+            min=min_val, max=max_val, step=step,
+            on_change=_on_change,
+        ).classes("w-32")
+
+    @ui.refreshable
     def _render_capture_table(self) -> None:
         """Render the capture points table."""
         columns = [
@@ -118,7 +148,22 @@ class BottomPanelComponent:
             {"name": "dec", "label": "Dec", "field": "dec"},
             {"name": "status", "label": "Status", "field": "status"},
         ]
-        rows = [
+        rows = self._build_table_rows()
+        with ui.column().classes("gap-2 flex-grow"):
+            ui.label("Capture Points").classes("text-weight-bold")
+            ui.table(
+                columns=columns,
+                rows=rows,
+                row_key="index",
+            ).classes("w-full")
+
+    def _build_table_rows(self) -> list[dict[str, object]]:
+        """Build row data for the capture points table.
+
+        Returns:
+            List of row dicts with index, ra, dec, and status.
+        """
+        return [
             {
                 "index": cp.index,
                 "ra": f"{cp.ra:.4f}",
@@ -127,13 +172,10 @@ class BottomPanelComponent:
             }
             for cp in self.state.project.capture_points
         ]
-        with ui.column().classes("gap-2 flex-grow"):
-            ui.label("Capture Points").classes("text-weight-bold")
-            ui.table(
-                columns=columns,
-                rows=rows,
-                row_key="index",
-            ).classes("w-full")
+
+    def _refresh_table(self) -> None:
+        """Refresh the capture table content."""
+        self._render_capture_table.refresh()  # type: ignore[attr-defined]
 
     def _render_indi_section(self) -> None:
         """Render INDI connection controls."""
@@ -155,7 +197,9 @@ class BottomPanelComponent:
                 port = int(port_input.value or 7624)
                 await self.state.indi_client.connect(host, port)
                 status_label.text = "Connected"
-                status_label.classes(remove="text-red", add="text-green")
+                status_label.classes(
+                    remove="text-red", add="text-green",
+                )
 
             ui.button(
                 "Connect", icon="power",
