@@ -83,6 +83,10 @@ Early development. The planner UI with star map, path drawing, and capture point
 - [Dependencies](docs/dependencies.md)
 - [Stellarium Build Guide](docs/stellarium-build.md)
 
+## Development
+
+Built with the help of [Claude Code](https://claude.ai/claude-code) (Anthropic) for architecture, implementation, and code review.
+
 ## License
 
 TBD
