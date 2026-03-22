@@ -36,3 +36,4 @@ htmlcov/
 
 # Environment
 .env
+.nicegui/
