@@ -294,7 +294,7 @@ render --input /path/to/capture/dir --output video.mp4 --fps 24
 
 | Component | Technology |
 |-----------|-----------|
-| Web framework (both apps) | NiceGUI (Python) |
+| Web framework (both apps) | NiceGUI (Python) on FastAPI/uvicorn |
 | Star map engine | Stellarium Web Engine (C/WASM/WebGL) |
 | Spline overlay | Stellarium Web Engine GeoJSON Path (cubic Bézier) |
 | Telescope control | PyINDI / INDI XML protocol |

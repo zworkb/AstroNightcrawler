@@ -98,6 +98,8 @@ description = "Telescope imaging sequence planner and capture controller"
 requires-python = ">=3.11"
 dependencies = [
     "nicegui>=2.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
     "pydantic>=2.0",
     "astropy>=6.0",
 ]
@@ -486,9 +488,36 @@ git commit -m "feat: add capture controller with pause/resume, retry, and safety
 - Methods: `update_capture_points()`, `save_project(path)`, `load_project(path)`, `start_capture()` (preserves existing captured points when resuming)
 - Uses dependency injection for INDI client (mock by default, real when available)
 
-- [ ] **Step 2: Create main entry point**
+- [ ] **Step 2: Create main entry point with FastAPI/uvicorn support**
 
-`src/main.py`: NiceGUI app with `@ui.page("/")`, calls `create_layout()`. Host/port configurable via argparse.
+`src/main.py`:
+- Create explicit FastAPI app instance, mount NiceGUI on it via `ui.run_with(app)`
+- Export `app` at module level so it can be started as a service: `uvicorn src.main:app --host 0.0.0.0 --port 8080`
+- Also support direct execution: `python -m src.main` (calls `uvicorn.run()` with configurable host/port via argparse or env vars)
+- NiceGUI pages registered with `@ui.page("/")`
+
+```python
+# src/main.py
+from fastapi import FastAPI
+from nicegui import ui
+
+from src.ui.layout import create_layout
+
+app = FastAPI(title="Sequence Planner")
+
+
+@ui.page("/")
+def index() -> None:
+    create_layout()
+
+
+ui.run_with(app, title="Sequence Planner", dark=True)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8080, reload=False)
+```
 
 - [ ] **Step 3: Create toolbar component**
 
