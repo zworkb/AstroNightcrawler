@@ -154,7 +154,7 @@ class ToolbarComponent:
             event: Upload event with file content.
             dialog: The open dialog to close after loading.
         """
-        content = event.content.read().decode()
+        content = (await event.file.read()).decode()
         self.state.load_project_from_json(content)
         dialog.close()
         ui.notify("Project loaded", type="positive")
