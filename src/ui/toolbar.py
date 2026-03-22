@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -158,9 +159,22 @@ class ToolbarComponent:
         self.state.load_project_from_json(content)
         dialog.close()
         ui.notify("Project loaded", type="positive")
-        # Defer overlay refresh so the dialog fully closes and the
-        # client is ready to execute JavaScript on the star-map canvas.
-        ui.timer(0.1, lambda: refresh_overlay(self.state), once=True)
+
+        # Fetch current observer/camera state before refreshing overlay,
+        # so RA/Dec → Az/Alt conversion has valid observer data.
+        async def _deferred_refresh() -> None:
+            try:
+                cam = await ui.run_javascript(
+                    "return window.stelBridge?.getCameraState()",
+                    timeout=5.0,
+                )
+                if cam and isinstance(cam, dict):
+                    self.state.last_camera.update(cam)
+            except TimeoutError:
+                pass
+            refresh_overlay(self.state)
+
+        ui.timer(0.3, lambda: asyncio.ensure_future(_deferred_refresh()), once=True)
 
     def _action(self, name: str) -> Callable[[], None]:
         """Return the callback for *name*, or a no-op."""
