@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/home/phil/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/brainstorming/scripts/stop-server.sh /home/phil/dev/astro/nicegui/sequence-planner/.superpowers/brainstorm/2702158-1774116604)",
+      "Read(//home/phil/dev/astro/nicegui/sequence-planner/**)",
+      "Bash(/home/phil/.claude/plugins/cache/claude-plugins-official/superpowers/5.0.5/skills/brainstorming/scripts/start-server.sh --project-dir /home/phil/dev/astro/nicegui/sequence-planner --host 0.0.0.0 --url-host 192.168.1.51)",
+      "Read(//home/phil/.claude/**)",
+      "WebSearch",
+      "Bash(for f:*)",
+      "Bash(do echo:*)",
+      "Bash(done)",
+      "WebFetch(domain:192.168.1.51)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:www.npmjs.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:stellarium-web.org)",
+      "Bash(gh api:*)",
+      "Bash(gh search:*)",
+      "WebFetch(domain:api.github.com)",
+      "WebFetch(domain:petapixel.com)",
+      "WebFetch(domain:wastjohn.github.io)",
+      "WebFetch(domain:stellarium.org)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ]
+  }
+}

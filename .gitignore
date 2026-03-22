@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# Stellarium Web Engine (AGPL, installed separately)
+static/stellarium/
+.stellarium-build/
+
+# Sky data (large binary tiles, downloaded separately)
+skydata/
+
+# Capture output
+output/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Superpowers brainstorm sessions
+.superpowers/
+
+# Testing / Coverage
+.pytest_cache/
+htmlcov/
+.coverage
+.mypy_cache/
+
+# Environment
+.env
