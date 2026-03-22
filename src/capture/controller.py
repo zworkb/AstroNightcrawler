@@ -170,15 +170,24 @@ class CaptureController:
             point: The capture point to process.
         """
         point.status = "capturing"
+        logger.info(
+            "Capturing point %d: RA=%.4f Dec=%.4f",
+            point.index, point.ra, point.dec,
+        )
         try:
             await self._slew_with_retry(point.ra, point.dec)
             await self._capture_exposures(point)
             point.status = "captured"
             point.captured_at = datetime.now(UTC).isoformat()
+            logger.info("Point %d captured OK", point.index)
         except (OSError, SlewTimeout, SettleTimeout, CaptureTimeout) as exc:
-            self._handle_error(point, str(exc))
+            logger.error("Point %d failed: %s: %s", point.index, type(exc).__name__, exc)
+            self._handle_error(point, f"{type(exc).__name__}: {exc}")
         except ConnectionLostError:
             await self._handle_connection_loss(point)
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Point %d unexpected error: %s: %s", point.index, type(exc).__name__, exc)
+            self._handle_error(point, f"{type(exc).__name__}: {exc}")
 
     async def _slew_with_retry(self, ra: float, dec: float) -> None:
         """Slew and settle with one automatic retry.
