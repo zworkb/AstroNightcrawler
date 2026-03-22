@@ -6,9 +6,7 @@
       "WebSearch",
       "WebFetch",
       "Bash(chmod +x scripts/install_stellarium.sh)",
-      "Bash(.venv/bin/mypy src/starmap/)",
-      "Bash(.venv/bin/mypy src/config.py src/app_state.py src/main.py src/ui/)",
-      "Bash(.venv/bin/mypy src/ui/capture_view.py)"
+      "Bash(.venv/bin/mypy)",
     ]
   }
 }

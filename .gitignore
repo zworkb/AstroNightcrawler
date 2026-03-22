@@ -9,12 +9,8 @@ build/
 .venv/
 venv/
 
-# Stellarium Web Engine (AGPL, installed separately)
-static/stellarium/
+# Stellarium Web Engine build directory
 .stellarium-build/
-
-# Sky data (large binary tiles, downloaded separately)
-skydata/
 
 # Capture output
 output/
