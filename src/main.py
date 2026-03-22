@@ -32,6 +32,7 @@ ui.run_with(
     title="Nightcrawler",
     dark=True,
     reconnect_timeout=10.0,
+    storage_secret="nightcrawler-secret",
 )
 
 

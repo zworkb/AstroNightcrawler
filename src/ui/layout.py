@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import Any
 
-from nicegui import ui
+from nicegui import app, ui
 
 from src.app_state import AppState
 from src.models.freehand import fit_bezier_to_points, rdp_simplify
@@ -26,9 +27,21 @@ _HEAD_CSS = (
 )
 
 
+def _auto_save(state: AppState) -> None:
+    """Save project to browser storage for persistence."""
+    app.storage.browser["project"] = state.project.model_dump_json()
+
+
 def create_layout() -> None:
     """Build the full-page layout with toolbar, map, and panel."""
     state = AppState()
+
+    # Restore project from browser storage if available
+    saved = app.storage.browser.get("project")
+    if saved:
+        with contextlib.suppress(Exception):
+            state.load_project_from_json(saved)
+
     capture_view = CaptureViewComponent()
 
     callbacks = _build_callbacks(state, capture_view)
@@ -74,6 +87,9 @@ def create_layout() -> None:
                     window.pathOverlayBridge.init('{cid}');
                     {listeners}
                     console.log('Overlay + events initialized');
+                    // Trigger camera update so restored paths are displayed
+                    const cam2 = window.stelBridge?.getCameraState();
+                    if (cam2) emitEvent('camera_state_update', cam2);
                 }}
             }})();
         </script>""")
@@ -208,7 +224,7 @@ def _on_map_click_sync(
     state.update_capture_points()
     panel.refresh()
     refresh_overlay(state)
-
+    _auto_save(state)
 
 
 
@@ -239,6 +255,7 @@ def _on_point_moved_sync(
         state.update_capture_points()
         panel.refresh()
         refresh_overlay(state)
+        _auto_save(state)
 
 
 def _on_freehand_sync(
@@ -271,6 +288,7 @@ def _on_freehand_sync(
     state.update_capture_points()
     panel.refresh()
     refresh_overlay(state)
+    _auto_save(state)
 
 
 def _on_remove_point_sync(
@@ -297,6 +315,7 @@ def _on_remove_point_sync(
     state.update_capture_points()
     panel.refresh()
     refresh_overlay(state)
+    _auto_save(state)
 
 
 def _on_handle_moved_sync(
@@ -330,6 +349,7 @@ def _on_handle_moved_sync(
         state.update_capture_points()
         panel.refresh()
         refresh_overlay(state)
+        _auto_save(state)
 
 
 def _convert_azalt(
