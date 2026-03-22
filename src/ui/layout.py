@@ -9,7 +9,7 @@ from nicegui import ui
 
 from src.app_state import AppState
 from src.models.freehand import fit_bezier_to_points, rdp_simplify
-from src.models.project import ControlPoint, SplinePath
+from src.models.project import ControlPoint, Coordinate, SplinePath
 from src.starmap.engine import StarMap
 from src.ui.bottom_panel import BottomPanelComponent
 from src.ui.capture_view import CaptureViewComponent
@@ -150,6 +150,9 @@ def _register_path_events(
     ui.on("path_remove_point", lambda e: _on_remove_point_sync(
         state, _extract_detail(e), panel,
     ))
+    ui.on("path_handle_moved", lambda e: _on_handle_moved_sync(
+        state, _extract_detail(e), panel,
+    ))
 
 
 def _on_map_click_sync(
@@ -265,5 +268,34 @@ def _on_remove_point_sync(
     state.update_capture_points()
     panel.refresh()
     refresh_overlay(state)
+
+
+def _on_handle_moved_sync(
+    state: AppState,
+    detail: dict[str, Any],
+    panel: BottomPanelComponent,
+) -> None:
+    """Handle a Bezier handle being dragged to a new position (sync).
+
+    Args:
+        state: Shared application state.
+        detail: Event detail with pointIndex, handleType, ra, dec.
+        panel: Bottom panel to refresh.
+    """
+    idx = detail.get("pointIndex", 0)
+    handle_type = detail.get("handleType", "out")
+    cps = state.project.path.control_points
+    if 0 <= idx < len(cps):
+        before = state.project.path.model_dump_json()
+        coord = Coordinate(ra=float(detail["ra"]), dec=float(detail["dec"]))
+        if handle_type == "in":
+            cps[idx].handle_in = coord
+        else:
+            cps[idx].handle_out = coord
+        after = state.project.path.model_dump_json()
+        state.undo_stack.push(before, after)
+        state.update_capture_points()
+        panel.refresh()
+        refresh_overlay(state)
 
 
