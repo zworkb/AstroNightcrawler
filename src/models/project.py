@@ -128,12 +128,8 @@ class INDIConfig(BaseModel):
 
     host: str = Field(default="localhost", description="INDI server hostname")
     port: int = Field(default=7624, description="INDI server port")
-    telescope: str = Field(description="INDI telescope device name")
-    camera: str = Field(description="INDI camera device name")
-    focuser: str | None = Field(default=None, description="Optional INDI focuser device name")
-    filter_wheel: str | None = Field(
-        default=None, description="Optional INDI filter wheel device name"
-    )
+    telescope: str = Field(default="", description="INDI telescope device name")
+    camera: str = Field(default="", description="INDI camera device name")
 
 
 class Project(BaseModel):
