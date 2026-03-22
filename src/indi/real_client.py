@@ -23,6 +23,28 @@ from src.indi.client import (
 logger = logging.getLogger(__name__)
 
 _SLEW_TIMEOUT = 120.0
+_STDERR_SUPPRESSED = False
+
+
+def _suppress_indi_stderr() -> None:
+    """Redirect stderr to filter out PyIndi C-library spam.
+
+    PyIndi's C layer prints "No IText", "Dispatch command error"
+    etc. directly to fd 2. We redirect fd 2 to /dev/null once.
+    Python's sys.stderr (used by logging) is not affected.
+    """
+    global _STDERR_SUPPRESSED  # noqa: PLW0603
+    if _STDERR_SUPPRESSED:
+        return
+    import os
+    import sys
+    # Save Python's stderr before redirect
+    sys.stderr = sys.__stderr__
+    devnull = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(devnull, 2)
+    os.close(devnull)
+    _STDERR_SUPPRESSED = True
+    logger.info("PyIndi stderr spam suppressed")
 _PROPERTY_POLL = 0.5
 
 
@@ -110,6 +132,7 @@ class RealINDIClient(INDIClient):
         self._last_host = host
         self._last_port = port
         self._handler.setServer(host, port)
+        _suppress_indi_stderr()
         ok = self._handler.connectServer()
         if not ok:
             raise INDIError(f"Cannot connect to {host}:{port}")
