@@ -45,3 +45,7 @@ select = ["E", "F", "I", "UP", "B", "SIM"]
 python_version = "3.11"
 strict = true
 warn_return_any = true
+
+[[tool.mypy.overrides]]
+module = ["astropy.*", "numpy.*"]
+ignore_missing_imports = true
