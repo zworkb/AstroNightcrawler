@@ -16,6 +16,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 EMSDK_DIR="${EMSDK_DIR:-$HOME/emsdk}"
+# Stellarium Web Engine requires an older Emscripten (EXTRA_EXPORTED_RUNTIME_METHODS removed in 3.x)
+# Stellarium Web Engine requires Emscripten 2.x (newer versions have breaking changes)
+EMSDK_VERSION="${EMSDK_VERSION:-2.0.34}"
 BUILD_DIR="${PROJECT_DIR}/build/stellarium-web-engine"
 STATIC_DIR="${PROJECT_DIR}/static/stellarium"
 REPO_URL="https://github.com/Stellarium/stellarium-web-engine.git"
@@ -48,11 +51,11 @@ fi
 if command -v emcc &>/dev/null; then
     ok "emcc already available: $(emcc --version 2>&1 | head -1)"
 else
-    echo "  Installing latest Emscripten (this takes a few minutes)..."
+    echo "  Installing Emscripten ${EMSDK_VERSION} (this takes a few minutes)..."
     cd "$EMSDK_DIR"
-    ./emsdk install latest
-    ./emsdk activate latest
-    ok "Emscripten installed"
+    ./emsdk install "$EMSDK_VERSION"
+    ./emsdk activate "$EMSDK_VERSION"
+    ok "Emscripten ${EMSDK_VERSION} installed"
 fi
 
 # Source emsdk environment
@@ -87,14 +90,25 @@ step "3/4 — Building WASM"
 
 cd "$BUILD_DIR"
 
-# Check if scons is available, install if not
-if ! command -v scons &>/dev/null; then
-    echo "  Installing scons..."
-    pip3 install --quiet scons
+# Always use project venv for scons
+VENV_PY="${PROJECT_DIR}/.venv/bin/python"
+if [ ! -f "$VENV_PY" ]; then
+    fail "Project venv not found. Run ./scripts/setup.sh first."
+    exit 1
 fi
 
+if ! "${VENV_PY}" -c "import SCons" 2>/dev/null; then
+    echo "  Installing scons in project venv..."
+    "${VENV_PY}" -m pip install --quiet scons
+fi
+export PATH="${PROJECT_DIR}/.venv/bin:$PATH"
+ok "scons ready"
+
+echo "  Patching SConstruct for emscripten compatibility..."
+sed -i "s/-Werror/-Werror -Wno-unused-command-line-argument -Wno-unused-but-set-variable/" SConstruct
+
 echo "  Building (this takes a few minutes on first run)..."
-make js 2>&1 | tail -5
+make js 2>&1 | tail -20
 
 if [ $? -ne 0 ]; then
     fail "Build failed"
