@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -160,21 +159,14 @@ class ToolbarComponent:
         dialog.close()
         ui.notify("Project loaded", type="positive")
 
-        # Fetch current observer/camera state before refreshing overlay,
-        # so RA/Dec → Az/Alt conversion has valid observer data.
-        async def _deferred_refresh() -> None:
-            try:
-                cam = await ui.run_javascript(
-                    "return window.stelBridge?.getCameraState()",
-                    timeout=5.0,
-                )
-                if cam and isinstance(cam, dict):
-                    self.state.last_camera.update(cam)
-            except TimeoutError:
-                pass
-            refresh_overlay(self.state)
-
-        ui.timer(0.3, lambda: asyncio.ensure_future(_deferred_refresh()), once=True)
+        # Get camera state synchronously via JS, then refresh overlay.
+        # The JS callback updates last_camera and triggers a Python refresh.
+        ui.run_javascript("""
+            (() => {
+                const cam = window.stelBridge?.getCameraState();
+                if (cam) emitEvent('camera_state_update', cam);
+            })();
+        """)
 
     def _action(self, name: str) -> Callable[[], None]:
         """Return the callback for *name*, or a no-op."""

@@ -154,6 +154,25 @@ def _register_path_events(
     ui.on("path_handle_moved", lambda e: _on_handle_moved_sync(
         state, _extract_detail(e), panel,
     ))
+    ui.on("camera_state_update", lambda e: _on_camera_update(
+        state, _extract_detail(e), panel,
+    ))
+
+
+def _on_camera_update(
+    state: AppState,
+    detail: dict[str, Any],
+    panel: BottomPanelComponent,
+) -> None:
+    """Handle camera state update from JS (used after project load).
+
+    Args:
+        state: Shared application state.
+        detail: Camera state dict with observer_* keys.
+        panel: Bottom panel to refresh.
+    """
+    state.last_camera.update(detail)
+    refresh_overlay(state)
 
 
 def _on_map_click_sync(
