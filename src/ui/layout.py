@@ -39,45 +39,41 @@ def create_layout() -> None:
         with ui.element("div").classes("map-container"):
             star_map = StarMap(width="100%", height="100%")
 
-        async def _init_starmap() -> None:
-            try:
-                await star_map.initialize(
-                    wasm_url="/static/stellarium/stellarium-web-engine.js",
-                    skydata_url="/skydata/",
-                )
-            except Exception:  # noqa: BLE001
-                logging.getLogger("starmap").warning(
-                    "Stellarium engine init failed", exc_info=True,
-                )
-            # Initialize path overlay on top of the star map
+        def _init_starmap() -> None:
+            """Initialize star map and overlay (non-blocking)."""
             cid = star_map.container_id
-            result = await ui.run_javascript(f"""
-                const el = document.getElementById('{cid}');
-                if (!el) return 'CONTAINER_NOT_FOUND: {cid}';
-                if (!window.pathOverlayBridge) return 'OVERLAY_NOT_LOADED';
-                if (!window.stelBridge) return 'BRIDGE_NOT_LOADED';
-                try {{
-                    window.pathOverlayBridge.init('{cid}');
-                    return 'OK: overlay initialized on ' + el.tagName;
-                }} catch(e) {{
-                    return 'ERROR: ' + e.message;
-                }}
-            """)
-            logging.getLogger("starmap").info("Overlay init: %s", result)
-            # Bridge DOM CustomEvents to NiceGUI server events
-            for evt in [
+            events = [
                 "map_click",
                 "path_add_point", "path_freehand_complete",
                 "path_move_point", "path_point_moved",
                 "path_remove_point", "path_split",
                 "path_add_point_on_segment",
-            ]:
-                await ui.run_javascript(f"""
-                    document.getElementById('{cid}')
-                        ?.addEventListener('{evt}', (e) => {{
-                            emitEvent('{evt}', e.detail);
-                        }});
-                """)
+            ]
+            listeners = "\n".join(
+                f"el.addEventListener('{evt}',"
+                f" (e) => emitEvent('{evt}', e.detail));"
+                for evt in events
+            )
+            # Single fire-and-forget JS call: init engine + overlay + events
+            ui.run_javascript(f"""
+                (async () => {{
+                    try {{
+                        await window.stelBridge.initEngine(
+                            '{cid}',
+                            '/static/stellarium/stellarium-web-engine.js',
+                            '/skydata/'
+                        );
+                    }} catch(e) {{
+                        console.warn('Stellarium init failed:', e);
+                    }}
+                    const el = document.getElementById('{cid}');
+                    if (el && window.pathOverlayBridge) {{
+                        window.pathOverlayBridge.init('{cid}');
+                        {listeners}
+                        console.log('Overlay + events initialized');
+                    }}
+                }})();
+            """)
 
         ui.timer(0.5, _init_starmap, once=True)
         panel = BottomPanelComponent(state)
