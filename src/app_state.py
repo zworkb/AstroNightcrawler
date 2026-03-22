@@ -9,7 +9,6 @@ from pathlib import Path
 from src.capture.controller import CaptureController
 from src.config import settings
 from src.indi.client import INDIClient
-from src.indi.mock import MockINDIClient
 from src.models.project import (
     CapturePoint,
     Project,
@@ -38,9 +37,7 @@ class AppState:
     """
 
     project: Project = field(default_factory=_default_project)
-    indi_client: INDIClient = field(
-        default_factory=MockINDIClient,
-    )
+    indi_client: INDIClient | None = None
     undo_stack: UndoStack = field(default_factory=UndoStack)
     current_mode: str = "pan"
     last_camera: dict[str, float] = field(default_factory=lambda: {
@@ -117,7 +114,13 @@ class AppState:
 
         Returns:
             A ready-to-run CaptureController instance.
+
+        Raises:
+            RuntimeError: If no INDI client is connected.
         """
+        if self.indi_client is None:
+            msg = "No INDI client connected. Use Connect first."
+            raise RuntimeError(msg)
         output = Path(settings.output_dir)
         output.mkdir(parents=True, exist_ok=True)
         return CaptureController(

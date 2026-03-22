@@ -206,8 +206,20 @@ class BottomPanelComponent:
                 host = host_input.value or "localhost"
                 port = int(port_input.value or 7624)
                 try:
+                    # Try TCP connection to verify INDI server is reachable
+                    import asyncio
+                    _, writer = await asyncio.wait_for(
+                        asyncio.open_connection(host, port),
+                        timeout=5.0,
+                    )
+                    writer.close()
+                    await writer.wait_closed()
+                    # Server reachable — create mock client for now
+                    # (real PyINDI client will replace this in #23)
+                    from src.indi.mock import MockINDIClient
+                    self.state.indi_client = MockINDIClient()
                     await self.state.indi_client.connect(host, port)
-                    status_label.text = "Connected"
+                    status_label.text = f"Connected to {host}:{port}"
                     status_label.classes(
                         remove="text-red", add="text-green",
                     )

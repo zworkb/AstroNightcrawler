@@ -30,6 +30,7 @@ def _make_test_state(tmp_path: Path) -> AppState:
         A configured AppState for testing.
     """
     state = AppState()
+    state.indi_client = MockINDIClient()
     state.project = Project(
         project="integration-test",
         path=SplinePath(
@@ -95,6 +96,7 @@ async def test_full_capture_workflow(tmp_path: Path) -> None:
 async def test_save_load_roundtrip(tmp_path: Path) -> None:
     """Save and load a project, verifying all fields are preserved."""
     state = AppState()
+    state.indi_client = MockINDIClient()
     state.project = Project(
         project="roundtrip-test",
         path=SplinePath(
@@ -218,6 +220,7 @@ async def test_freehand_to_capture(tmp_path: Path) -> None:
     assert len(control_points) >= 2
 
     state = AppState()
+    state.indi_client = MockINDIClient()
     state.project = Project(
         project="freehand-test",
         path=SplinePath(control_points=control_points),
