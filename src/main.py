@@ -1,5 +1,6 @@
 """FastAPI + NiceGUI entry point for Nightcrawler."""
 
+import logging
 from pathlib import Path
 
 from fastapi import FastAPI
@@ -38,6 +39,10 @@ ui.run_with(
 
 def main() -> None:
     """Start the application server."""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(name)s %(levelname)s: %(message)s",
+    )
     import uvicorn
 
     uvicorn.run(

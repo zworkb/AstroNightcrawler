@@ -153,10 +153,9 @@ async def _start_capture(
     """
     try:
         controller = state.start_capture()
-        logging.getLogger("capture").info(
-            "Starting capture: %d points, client=%s",
-            len(controller.project.capture_points),
-            type(state.indi_client).__name__,
+        print(  # noqa: T201
+            f"Starting capture: {len(controller.project.capture_points)} points,"
+            f" client={type(state.indi_client).__name__}",
         )
         capture_view.start(controller)
         await controller.run()
