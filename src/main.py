@@ -1,4 +1,4 @@
-"""FastAPI + NiceGUI entry point for Sequence Planner."""
+"""FastAPI + NiceGUI entry point for Nightcrawler."""
 
 from pathlib import Path
 
@@ -9,7 +9,7 @@ from nicegui import ui
 from src.config import settings
 from src.ui.layout import create_layout
 
-app = FastAPI(title="Sequence Planner")
+app = FastAPI(title="Nightcrawler")
 
 # Serve Stellarium WASM + skydata as static files
 _static_dir = Path(__file__).parent.parent / "static"
@@ -29,7 +29,7 @@ def index() -> None:
 
 ui.run_with(
     app,
-    title="Sequence Planner",
+    title="Nightcrawler",
     dark=True,
     reconnect_timeout=10.0,
 )

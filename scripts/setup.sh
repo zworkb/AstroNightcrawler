@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Sequence Planner — Setup Script (idempotent, safe to re-run)
+# Nightcrawler — Setup Script (idempotent, safe to re-run)
 # =============================================================================
 set -euo pipefail
 
@@ -24,7 +24,7 @@ fail() { echo -e "  ${RED}✗${NC} $1"; }
 cd "$PROJECT_DIR"
 
 echo ""
-echo "=== Sequence Planner Setup ==="
+echo "=== Nightcrawler Setup ==="
 echo ""
 
 # ---- Track overall status ---------------------------------------------------
@@ -179,7 +179,7 @@ else
 fi
 echo ""
 echo "    source .venv/bin/activate"
-echo "    sequence-planner"
+echo "    nightcrawler"
 echo ""
 echo "  Or without activation:"
 echo ""

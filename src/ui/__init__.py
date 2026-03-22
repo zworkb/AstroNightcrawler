@@ -1,1 +1,1 @@
-"""NiceGUI UI components for Sequence Planner."""
+"""NiceGUI UI components for Nightcrawler."""

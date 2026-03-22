@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables.
 
     All settings can be overridden via environment variables prefixed
-    with ``SEQ_``, or via a ``.env`` file in the project root.
+    with ``NC_``, or via a ``.env`` file in the project root.
 
     Attributes:
         host: Server bind address.
@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     indi_host: str = "localhost"
     indi_port: int = 7624
 
-    model_config = {"env_prefix": "SEQ_", "env_file": ".env"}
+    model_config = {"env_prefix": "NC_", "env_file": ".env"}
 
 
 settings = Settings()

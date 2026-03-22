@@ -1,4 +1,4 @@
-# Sequence Planner — Design Specification
+# Nightcrawler — Design Specification
 
 ## Overview
 

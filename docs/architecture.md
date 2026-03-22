@@ -1,4 +1,4 @@
-# Sequence Planner — Architecture (UML)
+# Nightcrawler — Architecture (UML)
 
 ## 1. Komponentendiagramm
 

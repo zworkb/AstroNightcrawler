@@ -11,7 +11,7 @@ Die Sternkarte basiert auf der [Stellarium Web Engine](https://github.com/Stella
 ./scripts/build_stellarium.sh
 
 # App starten
-sequence-planner
+nightcrawler
 ```
 
 Das war's. Das Script erledigt alles automatisch.
@@ -53,7 +53,7 @@ EMSDK_DIR=/pfad/zu/emsdk ./scripts/build_stellarium.sh
 ## Verzeichnisstruktur nach dem Build
 
 ```
-sequence-planner/
+nightcrawler/
 ├── static/
 │   └── stellarium/
 │       ├── stellarium-web-engine.js    ← JS-Loader (79 KB)

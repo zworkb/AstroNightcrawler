@@ -1,4 +1,4 @@
-# Sequence Planner
+# Nightcrawler
 
 A browser-based application for planning and executing imaging sequences with a remote-controlled telescope. Draw a path on an interactive star map, and the telescope follows it point by point, capturing images at each position. The resulting frames can be assembled into a video.
 
@@ -30,10 +30,10 @@ The two apps communicate through a directory of FITS files plus a JSON manifest 
 
 ```bash
 git clone <repo-url>
-cd sequence-planner
+cd nightcrawler
 ./scripts/setup.sh           # Python venv + dependencies + smoke tests
 ./scripts/build_stellarium.sh # Build Stellarium Web Engine (requires Emscripten, ~10 min)
-sequence-planner              # Start the app (or: .venv/bin/python -m src.main)
+nightcrawler              # Start the app (or: .venv/bin/python -m src.main)
 ```
 
 Open `http://localhost:8090` in your browser.
@@ -51,11 +51,11 @@ All settings via environment variables or `.env` file (see `.env.example`):
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `SEQ_HOST` | `0.0.0.0` | Server bind address |
-| `SEQ_PORT` | `8090` | Server port |
-| `SEQ_OUTPUT_DIR` | `./output` | Capture output directory |
-| `SEQ_INDI_HOST` | `localhost` | INDI server hostname |
-| `SEQ_INDI_PORT` | `7624` | INDI server port |
+| `NC_HOST` | `0.0.0.0` | Server bind address |
+| `NC_PORT` | `8090` | Server port |
+| `NC_OUTPUT_DIR` | `./output` | Capture output directory |
+| `NC_INDI_HOST` | `localhost` | INDI server hostname |
+| `NC_INDI_PORT` | `7624` | INDI server port |
 
 ## Technology
 
@@ -75,7 +75,7 @@ Early development. The planner UI with star map, path drawing, and capture point
 
 ## Documentation
 
-- [Design Specification](docs/superpowers/specs/2026-03-22-sequence-planner-design.md)
+- [Design Specification](docs/superpowers/specs/2026-03-22-nightcrawler-design.md)
 - [Implementation Plan](docs/superpowers/plans/2026-03-22-planner-capture-app.md)
 - [Architecture (UML)](docs/architecture.md)
 - [Dependencies](docs/dependencies.md)

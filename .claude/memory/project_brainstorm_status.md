@@ -1,5 +1,5 @@
 ---
-name: Brainstorm status - Sequence Planner
+name: Brainstorm status - Nightcrawler
 description: Current brainstorming and planning status for the telescope sequence planner project
 type: project
 ---
@@ -7,7 +7,7 @@ type: project
 ## Status
 
 - Brainstorming: **COMPLETE**
-- Design Spec: **COMPLETE** — `docs/superpowers/specs/2026-03-22-sequence-planner-design.md`
+- Design Spec: **COMPLETE** — `docs/superpowers/specs/2026-03-22-nightcrawler-design.md`
 - Planner/Capture Plan: **COMPLETE** — `docs/superpowers/plans/2026-03-22-planner-capture-app.md` (15 tasks, reviewed 2×)
 - Rendering App Plan: **NOT STARTED** (separate plan, after planner/capture is implemented)
 - Implementation: **NOT STARTED**

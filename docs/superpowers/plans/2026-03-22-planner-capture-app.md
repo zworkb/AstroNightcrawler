@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11+, NiceGUI, Stellarium Web Engine (WASM), PyINDI-client, pydantic (data models), astropy (FITS), pytest, ruff, mypy
 
-**Spec:** `docs/superpowers/specs/2026-03-22-sequence-planner-design.md`
+**Spec:** `docs/superpowers/specs/2026-03-22-nightcrawler-design.md`
 
 **Coding Standards:** `cleancode.md` + `cleancode-python.md` — all code must comply. Key rules:
 - Type hints on all functions, modern syntax (`list[str]`, `str | None`)
@@ -22,9 +22,9 @@
 ## File Structure
 
 ```
-sequence-planner/
+nightcrawler/
 ├── .gitignore
-├── .env                              # Default config (SEQ_HOST, SEQ_PORT, etc.)
+├── .env                              # Default config (NC_HOST, NC_PORT, etc.)
 ├── pyproject.toml                    # Project config, dependencies, ruff/mypy config
 ├── src/
 │   ├── __init__.py
@@ -80,7 +80,7 @@ sequence-planner/
 
 **Known limitations (documented in code):**
 - Spline math uses flat Euclidean coordinates (no `cos(dec)` correction). Accurate for paths <15°, inaccurate for large angular distances.
-- Default bind `0.0.0.0:8090` — intentional for network access (tablet in observatory). Configurable via `SEQ_HOST`/`SEQ_PORT` env vars or `.env` file.
+- Default bind `0.0.0.0:8090` — intentional for network access (tablet in observatory). Configurable via `NC_HOST`/`NC_PORT` env vars or `.env` file.
 
 ---
 
@@ -94,7 +94,7 @@ sequence-planner/
 
 ```toml
 [project]
-name = "sequence-planner"
+name = "nightcrawler"
 version = "0.1.0"
 description = "Telescope imaging sequence planner and capture controller"
 requires-python = ">=3.11"
@@ -119,7 +119,7 @@ indi = [
 ]
 
 [project.scripts]
-sequence-planner = "src.main:main"
+nightcrawler = "src.main:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
@@ -513,21 +513,21 @@ class Settings(BaseSettings):
     indi_host: str = "localhost"
     indi_port: int = 7624
 
-    model_config = {"env_prefix": "SEQ_", "env_file": ".env"}
+    model_config = {"env_prefix": "NC_", "env_file": ".env"}
 
 
 settings = Settings()
 ```
 
-All settings are overridable via `SEQ_`-prefixed env vars (e.g., `SEQ_PORT=9000`) or a `.env` file in the project root. Default `.env` shipped with the project:
+All settings are overridable via `NC_`-prefixed env vars (e.g., `NC_PORT=9000`) or a `.env` file in the project root. Default `.env` shipped with the project:
 
 ```env
 # .env
-SEQ_HOST=0.0.0.0
-SEQ_PORT=8090
-SEQ_OUTPUT_DIR=./output
-SEQ_INDI_HOST=localhost
-SEQ_INDI_PORT=7624
+NC_HOST=0.0.0.0
+NC_PORT=8090
+NC_OUTPUT_DIR=./output
+NC_INDI_HOST=localhost
+NC_INDI_PORT=7624
 ```
 
 `src/main.py`:
@@ -544,7 +544,7 @@ from nicegui import ui
 from src.config import settings
 from src.ui.layout import create_layout
 
-app = FastAPI(title="Sequence Planner")
+app = FastAPI(title="Nightcrawler")
 
 
 @ui.page("/")
@@ -552,11 +552,11 @@ def index() -> None:
     create_layout()
 
 
-ui.run_with(app, title="Sequence Planner", dark=True)
+ui.run_with(app, title="Nightcrawler", dark=True)
 
 
 def main() -> None:
-    """Entry point for `sequence-planner` console script."""
+    """Entry point for `nightcrawler` console script."""
     import uvicorn
     uvicorn.run("src.main:app", host=settings.host, port=settings.port, reload=False)
 

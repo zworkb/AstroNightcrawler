@@ -1,5 +1,5 @@
 [project]
-name = "sequence-planner"
+name = "nightcrawler"
 version = "0.1.0"
 description = "Telescope imaging sequence planner and capture controller"
 requires-python = ">=3.11"
@@ -25,7 +25,7 @@ indi = [
 ]
 
 [project.scripts]
-sequence-planner = "src.main:main"
+nightcrawler = "src.main:main"
 
 [build-system]
 requires = ["setuptools>=68.0"]
