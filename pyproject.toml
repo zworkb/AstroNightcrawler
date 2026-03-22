@@ -1,0 +1,47 @@
+[project]
+name = "sequence-planner"
+version = "0.1.0"
+description = "Telescope imaging sequence planner and capture controller"
+requires-python = ">=3.11"
+dependencies = [
+    "nicegui>=2.0",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
+    "pydantic>=2.0",
+    "pydantic-settings>=2.0",
+    "astropy>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+    "mypy>=1.10",
+]
+indi = [
+    "pyindi-client>=2.0",
+]
+
+[project.scripts]
+sequence-planner = "src.main:main"
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
