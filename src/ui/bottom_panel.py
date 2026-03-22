@@ -73,6 +73,12 @@ class BottomPanelComponent:
         )
         return (n * per_point) / 60.0
 
+    def _on_apply_settings(self) -> None:
+        """Recalculate capture points and refresh overlay."""
+        self.state.update_capture_points()
+        self.refresh()
+        refresh_overlay(self.state)
+
     def _render_path_settings(self) -> None:
         """Render path and capture setting inputs."""
         cs = self.state.project.capture_settings
@@ -102,6 +108,10 @@ class BottomPanelComponent:
                 "Binning", cs.binning,
                 1, 4, 1, "binning", as_int=True,
             )
+            ui.button(
+                "Apply", icon="check",
+                on_click=self._on_apply_settings,
+            ).props("dense color=primary size=sm")
 
     def _setting_number(
         self,
@@ -132,9 +142,6 @@ class BottomPanelComponent:
             if val is None:
                 return
             setattr(cs, a, int(val) if as_int else val)
-            self.state.update_capture_points()
-            self.refresh()
-            refresh_overlay(self.state)
 
         ui.number(
             label, value=value,
