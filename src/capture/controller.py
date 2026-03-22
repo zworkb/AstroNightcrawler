@@ -180,6 +180,9 @@ class CaptureController:
             point.status = "captured"
             point.captured_at = datetime.now(UTC).isoformat()
             logger.info("Point %d captured OK", point.index)
+        except TimeoutError as exc:
+            logger.error("Point %d timed out: %s", point.index, exc)
+            self._handle_error(point, f"Timeout: {exc}")
         except (OSError, SlewTimeout, SettleTimeout, CaptureTimeout) as exc:
             logger.error("Point %d failed: %s: %s", point.index, type(exc).__name__, exc)
             self._handle_error(point, f"{type(exc).__name__}: {exc}")
@@ -197,12 +200,8 @@ class CaptureController:
             dec: Declination in degrees.
         """
         try:
-            await asyncio.wait_for(
-                self.indi.slew_to(ra, dec), timeout=SLEW_TIMEOUT
-            )
-            await asyncio.wait_for(
-                self.indi.wait_for_settle(SETTLE_TIMEOUT),
-                timeout=SETTLE_TIMEOUT,
+            await self.indi.slew_to(ra, dec)
+            await self.indi.wait_for_settle(SETTLE_TIMEOUT
             )
         except (TimeoutError, SlewTimeout, SettleTimeout):
             await self._retry_slew(ra, dec)
@@ -214,13 +213,8 @@ class CaptureController:
             ra: Right ascension in degrees.
             dec: Declination in degrees.
         """
-        await asyncio.wait_for(
-            self.indi.slew_to(ra, dec), timeout=SLEW_TIMEOUT
-        )
-        await asyncio.wait_for(
-            self.indi.wait_for_settle(SETTLE_TIMEOUT),
-            timeout=SETTLE_TIMEOUT,
-        )
+        await self.indi.slew_to(ra, dec)
+        await self.indi.wait_for_settle(SETTLE_TIMEOUT)
 
     async def _capture_exposures(self, point: CapturePoint) -> None:
         """Capture all exposures for a point and write FITS files.
