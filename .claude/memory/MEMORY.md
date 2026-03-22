@@ -5,3 +5,4 @@
 - [project_architecture_overview.md](project_architecture_overview.md) — Two-machine setup: planner/capture on RPi/StellarMate, rendering on powerful desktop
 - [project_brainstorm_status.md](project_brainstorm_status.md) — Complete brainstorming results with all decided and open points
 - [reference_cleancode.md](reference_cleancode.md) — Clean Code standards in cleancode.md + cleancode-python.md, must be followed for all code and reviews
+- [feedback_execution_mode.md](feedback_execution_mode.md) — Use subagent-driven development for plan execution
