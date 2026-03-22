@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 
 from nicegui import ui
 
+from src.ui.overlay_sync import refresh_overlay
+
 if TYPE_CHECKING:
     from src.app_state import AppState
 
@@ -132,6 +134,7 @@ class BottomPanelComponent:
             setattr(cs, a, int(val) if as_int else val)
             self.state.update_capture_points()
             self.refresh()
+            refresh_overlay(self.state)
 
         ui.number(
             label, value=value,
