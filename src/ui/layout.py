@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
 import logging
 from typing import Any
 
@@ -28,19 +27,37 @@ _HEAD_CSS = (
 
 
 def _auto_save(state: AppState) -> None:
-    """Save project to browser storage for persistence."""
-    app.storage.browser["project"] = state.project.model_dump_json()
+    """Save project to server-side user storage for persistence."""
+    data = state.project.model_dump_json()
+    app.storage.user["project"] = data
+    logging.getLogger("starmap").info(
+        "Auto-saved project (%d control points, %d bytes)",
+        len(state.project.path.control_points), len(data),
+    )
 
 
 def create_layout() -> None:
     """Build the full-page layout with toolbar, map, and panel."""
     state = AppState()
 
-    # Restore project from browser storage if available
-    saved = app.storage.browser.get("project")
+    # Restore project from server-side user storage if available
+    saved = app.storage.user.get("project")
     if saved:
-        with contextlib.suppress(Exception):
+        logging.getLogger("starmap").info(
+            "Restoring project from storage (%d bytes)", len(saved),
+        )
+        try:
             state.load_project_from_json(saved)
+            logging.getLogger("starmap").info(
+                "Restored %d control points",
+                len(state.project.path.control_points),
+            )
+        except Exception:  # noqa: BLE001
+            logging.getLogger("starmap").warning(
+                "Failed to restore project from storage", exc_info=True,
+            )
+    else:
+        logging.getLogger("starmap").info("No saved project in storage")
 
     capture_view = CaptureViewComponent()
 
