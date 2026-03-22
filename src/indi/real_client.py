@@ -55,7 +55,7 @@ class _INDIHandler(PyIndi.BaseClient):
 
     def newBLOB(self, bp: PyIndi.PropertyBlob) -> None:  # noqa: N802
         """Receive BLOB (image data) from camera."""
-        for i in range(bp.nblp):
+        for i in range(bp.count()):
             blob = bp[i]
             self._blob_data = blob.getblobdata()
             self._blob_event.set()
@@ -128,8 +128,8 @@ class RealINDIClient(INDIClient):
         """Slew the telescope to the given coordinates.
 
         Args:
-            ra: Right ascension in decimal hours (0..24).
-            dec: Declination in decimal degrees (-90..+90).
+            ra: Right ascension in degrees (0..360).
+            dec: Declination in degrees (-90..+90).
         """
         self._require_connected()
         telescope = self._find_telescope()
@@ -137,10 +137,11 @@ class RealINDIClient(INDIClient):
             raise INDIError("No telescope device found")
 
         coord = await self._await_number(telescope, "EQUATORIAL_EOD_COORD")
-        coord[0].value = ra
+        ra_hours = ra / 15.0  # INDI uses hours for RA
+        coord[0].value = ra_hours
         coord[1].value = dec
         self._handler.sendNewNumber(coord)
-        logger.info("Slew commanded: RA=%.4f h  Dec=%.4f°", ra, dec)
+        logger.info("Slew commanded: RA=%.4f° (%.4fh)  Dec=%.4f°", ra, ra_hours, dec)
 
         await self._poll_until_ok(coord, _SLEW_TIMEOUT, SlewTimeout)
 
@@ -161,7 +162,7 @@ class RealINDIClient(INDIClient):
         start = time.monotonic()
         while time.monotonic() - start < timeout:
             track = telescope.getSwitch("TELESCOPE_TRACK_STATE")
-            if track and track[0].s == PyIndi.ISS_ON:
+            if track and track[0].getState() == PyIndi.ISS_ON:
                 return True
             await asyncio.sleep(_PROPERTY_POLL)
         raise SettleTimeout(f"Mount did not settle within {timeout}s")
@@ -208,7 +209,7 @@ class RealINDIClient(INDIClient):
             return
         abort_prop = telescope.getSwitch("TELESCOPE_ABORT_MOTION")
         if abort_prop:
-            abort_prop[0].s = PyIndi.ISS_ON
+            abort_prop[0].setState(PyIndi.ISS_ON)
             self._handler.sendNewSwitch(abort_prop)
             logger.info("Abort sent")
 
@@ -272,7 +273,7 @@ class RealINDIClient(INDIClient):
         """
         start = time.monotonic()
         while time.monotonic() - start < timeout:
-            state = prop.s
+            state = prop.getState()
             if state == PyIndi.IPS_OK:
                 return
             if state == PyIndi.IPS_ALERT:
