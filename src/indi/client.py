@@ -56,6 +56,9 @@ class INDIClient(ABC):
     concrete connection to an INDI server (or a mock/test double).
     """
 
+    _last_host: str = "localhost"
+    _last_port: int = 7624
+
     @property
     @abstractmethod
     def connected(self) -> bool:
@@ -126,7 +129,7 @@ class INDIClient(ABC):
         raise NotImplementedError
 
     async def reconnect(self, timeout: float = 60.0) -> bool:
-        """Retry connecting every 10 seconds for up to *timeout* seconds.
+        """Retry connecting to the last-used host every 10s.
 
         Args:
             timeout: Maximum total seconds to keep retrying.
@@ -138,7 +141,7 @@ class INDIClient(ABC):
         interval = 10.0
         while elapsed < timeout:
             try:
-                await self.connect("localhost")
+                await self.connect(self._last_host, self._last_port)
                 return True
             except INDIError:
                 await asyncio.sleep(interval)

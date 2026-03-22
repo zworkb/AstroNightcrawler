@@ -8,10 +8,10 @@ from pathlib import Path
 
 from src.capture.controller import CaptureController
 from src.config import settings
+from src.indi.client import INDIClient
 from src.indi.mock import MockINDIClient
 from src.models.project import (
     CapturePoint,
-    ControlPoint,
     Project,
     SplinePath,
 )
@@ -38,7 +38,7 @@ class AppState:
     """
 
     project: Project = field(default_factory=_default_project)
-    indi_client: MockINDIClient = field(
+    indi_client: INDIClient = field(
         default_factory=MockINDIClient,
     )
     undo_stack: UndoStack = field(default_factory=UndoStack)

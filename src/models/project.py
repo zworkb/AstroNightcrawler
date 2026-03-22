@@ -48,12 +48,9 @@ class SplinePath(BaseModel):
     spline_type: str = Field(default="cubic_bezier", description="Type of spline interpolation")
     coordinate_frame: str = Field(default="J2000", description="Coordinate reference frame")
 
-    @field_validator("control_points")
-    @classmethod
-    def validate_min_points(cls, v: list[ControlPoint]) -> list[ControlPoint]:
-        """Validate control points (1 point is allowed during editing)."""
-        # Allow 0-1 points during editing; capture requires ≥2.
-        return v
+    # No minimum point count enforced at model level.
+    # Paths with 0-1 points are valid during editing.
+    # The capture controller validates ≥2 points before starting.
 
 
 class CaptureSettings(BaseModel):

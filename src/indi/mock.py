@@ -74,9 +74,11 @@ class MockINDIClient(INDIClient):
         """Simulate connecting to an INDI server.
 
         Args:
-            host: Hostname (ignored in mock).
-            port: Port number (ignored in mock).
+            host: Hostname (stored for reconnect).
+            port: Port number (stored for reconnect).
         """
+        self._last_host = host
+        self._last_port = port
         self._connected = True
 
     async def disconnect(self) -> None:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 from nicegui import ui
 
 from src.models.project import SplinePath
+from src.ui.overlay_sync import refresh_overlay
 
 if TYPE_CHECKING:
     from src.app_state import AppState
@@ -157,7 +157,7 @@ class ToolbarComponent:
         content = event.content.read().decode()
         self.state.load_project_from_json(content)
         dialog.close()
-        await _refresh_overlay(self.state)
+        refresh_overlay(self.state)
         ui.notify("Project loaded", type="positive")
 
     def _action(self, name: str) -> Callable[[], None]:
@@ -186,7 +186,7 @@ class ToolbarComponent:
         path = SplinePath.model_validate_json(snapshot)
         self.state.project.path = path
         self.state.update_capture_points()
-        await _refresh_overlay(self.state)
+        refresh_overlay(self.state)
 
     async def _on_redo(self) -> None:
         """Redo the last undone action and refresh the overlay."""
@@ -196,61 +196,6 @@ class ToolbarComponent:
         path = SplinePath.model_validate_json(snapshot)
         self.state.project.path = path
         self.state.update_capture_points()
-        await _refresh_overlay(self.state)
+        refresh_overlay(self.state)
 
 
-async def _refresh_overlay(state: AppState) -> None:
-    """Serialize path data and push to the JS overlay.
-
-    Args:
-        state: Application state with current path and capture points.
-    """
-    cp_data = _serialize_control_points(state)
-    cap_data = _serialize_capture_points(state)
-    js = (
-        "window.pathOverlayBridge?.update("
-        f"{json.dumps(cp_data)}, {json.dumps(cap_data)})"
-    )
-    await ui.run_javascript(js)
-
-
-def _serialize_control_points(state: AppState) -> list[dict[str, object]]:
-    """Serialize control points for the JS overlay.
-
-    Args:
-        state: Application state.
-
-    Returns:
-        List of serialized control point dicts.
-    """
-    return [
-        {
-            "ra": cp.ra,
-            "dec": cp.dec,
-            "label": cp.label,
-            "handleIn": (
-                {"ra": cp.handle_in.ra, "dec": cp.handle_in.dec}
-                if cp.handle_in else None
-            ),
-            "handleOut": (
-                {"ra": cp.handle_out.ra, "dec": cp.handle_out.dec}
-                if cp.handle_out else None
-            ),
-        }
-        for cp in state.project.path.control_points
-    ]
-
-
-def _serialize_capture_points(state: AppState) -> list[dict[str, object]]:
-    """Serialize capture points for the JS overlay.
-
-    Args:
-        state: Application state.
-
-    Returns:
-        List of serialized capture point dicts.
-    """
-    return [
-        {"ra": p.ra, "dec": p.dec, "index": p.index}
-        for p in state.project.capture_points
-    ]

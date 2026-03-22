@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import contextlib
-import json
 import logging
 from typing import Any
 
@@ -12,9 +10,9 @@ from nicegui import ui
 from src.app_state import AppState
 from src.models.project import ControlPoint
 from src.starmap.engine import StarMap
-from src.starmap.projection import pixel_to_radec
 from src.ui.bottom_panel import BottomPanelComponent
 from src.ui.capture_view import CaptureViewComponent
+from src.ui.overlay_sync import refresh_overlay
 from src.ui.toolbar import ToolbarComponent
 
 _HEAD_CSS = (
@@ -42,10 +40,14 @@ def create_layout() -> None:
             star_map = StarMap(width="100%", height="100%")
 
         async def _init_starmap() -> None:
-            with contextlib.suppress(Exception):
+            try:
                 await star_map.initialize(
                     wasm_url="/static/stellarium/stellarium-web-engine.js",
                     skydata_url="/skydata/",
+                )
+            except Exception:  # noqa: BLE001
+                logging.getLogger("starmap").warning(
+                    "Stellarium engine init failed", exc_info=True,
                 )
             # Initialize path overlay on top of the star map
             cid = star_map.container_id
@@ -61,8 +63,7 @@ def create_layout() -> None:
                     return 'ERROR: ' + e.message;
                 }}
             """)
-            import logging
-            logging.getLogger("starmap").warning("Overlay init: %s", result)
+            logging.getLogger("starmap").info("Overlay init: %s", result)
             # Bridge DOM CustomEvents to NiceGUI server events
             for evt in [
                 "map_click",
@@ -136,7 +137,7 @@ def _register_path_events(
         """Extract event detail from NiceGUI event args."""
         args = e.args
         if isinstance(args, dict):
-            return args.get("detail", args)
+            return dict(args.get("detail", args))
         if isinstance(args, list) and args:
             return args[0] if isinstance(args[0], dict) else {}
         return {}
@@ -179,28 +180,7 @@ def _on_map_click_sync(
     state.undo_stack.push(before, after)
     state.update_capture_points()
     panel.refresh()
-    _refresh_overlay_sync(state)
-
-
-def _detail_to_radec(detail: dict[str, Any]) -> tuple[float, float]:
-    """Convert event detail with pixel+camera to RA/Dec.
-
-    Args:
-        detail: Dict with x, y, canvas_width, canvas_height,
-                yaw, pitch, fov.
-
-    Returns:
-        Tuple of (ra, dec) in degrees.
-    """
-    return pixel_to_radec(
-        x=detail["x"],
-        y=detail["y"],
-        canvas_width=int(detail.get("canvas_width", 800)),
-        canvas_height=int(detail.get("canvas_height", 600)),
-        center_yaw=detail.get("yaw", 0.0),
-        center_pitch=detail.get("pitch", 0.0),
-        fov=detail.get("fov", 60.0),
-    )
+    refresh_overlay(state)
 
 
     # NOTE: freehand and move handlers will be added when those modes
@@ -230,35 +210,6 @@ def _on_remove_point_sync(
     state.undo_stack.push(before, after)
     state.update_capture_points()
     panel.refresh()
-    _refresh_overlay_sync(state)
+    refresh_overlay(state)
 
 
-def _refresh_overlay_sync(state: AppState) -> None:
-    """Send path data to JS overlay (projection done client-side).
-
-    Args:
-        state: Application state with path and capture points.
-    """
-    cp_data = [
-        {
-            "ra": cp.ra, "dec": cp.dec, "label": cp.label,
-            "handleIn": (
-                {"ra": cp.handle_in.ra, "dec": cp.handle_in.dec}
-                if cp.handle_in else None
-            ),
-            "handleOut": (
-                {"ra": cp.handle_out.ra, "dec": cp.handle_out.dec}
-                if cp.handle_out else None
-            ),
-        }
-        for cp in state.project.path.control_points
-    ]
-    cap_data = [
-        {"ra": p.ra, "dec": p.dec, "index": p.index}
-        for p in state.project.capture_points
-    ]
-    js = (
-        "window.pathOverlayBridge?.update("
-        f"{json.dumps(cp_data)}, {json.dumps(cap_data)})"
-    )
-    ui.run_javascript(js)

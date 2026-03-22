@@ -41,9 +41,12 @@ class TestControlPoint:
 
 
 class TestSplinePath:
-    def test_needs_at_least_two_points(self) -> None:
-        with pytest.raises(ValueError):
-            SplinePath(control_points=[ControlPoint(ra=10.0, dec=40.0)])
+    def test_allows_empty_and_single_point_for_editing(self) -> None:
+        """Editing allows 0 or 1 points; capture validates separately."""
+        empty = SplinePath(control_points=[])
+        assert len(empty.control_points) == 0
+        single = SplinePath(control_points=[ControlPoint(ra=10.0, dec=40.0)])
+        assert len(single.control_points) == 1
 
     def test_defaults(self) -> None:
         path = SplinePath(control_points=[

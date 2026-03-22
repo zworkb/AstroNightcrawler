@@ -80,6 +80,7 @@ class CaptureController:
         self._pause_event = asyncio.Event()
         self._pause_event.set()
         self._cancel_flag = False
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._register_safety_handlers()
 
     # ------------------------------------------------------------------
@@ -92,6 +93,7 @@ class CaptureController:
         Iterates all capture points, skipping those already captured.
         On completion writes a manifest. Respects pause and cancel.
         """
+        self._loop = asyncio.get_running_loop()
         self.state = CaptureState.RUNNING
         points = self.project.capture_points
         while self.current_point_index < len(points):
@@ -291,12 +293,13 @@ class CaptureController:
 
     def _safety_abort(self) -> None:
         """Synchronous abort called at interpreter exit."""
+        if self._loop is None:
+            return
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                loop.create_task(self.indi.abort())
+            if self._loop.is_running():
+                self._loop.create_task(self.indi.abort())
             else:
-                loop.run_until_complete(self.indi.abort())
+                self._loop.run_until_complete(self.indi.abort())
         except Exception:  # noqa: BLE001
             pass
 
