@@ -167,15 +167,11 @@ def _on_map_click_sync(
 
     if state.current_mode != "draw":
         return
-    if "x" not in detail:
+    if "ra" not in detail:
         return
 
-    # Cache camera state for overlay refresh
-    for key in ("canvas_width", "canvas_height", "yaw", "pitch", "fov"):
-        if key in detail:
-            state.last_camera[key] = detail[key]
-
-    ra, dec = _detail_to_radec(detail)
+    ra = float(detail["ra"])
+    dec = float(detail["dec"])
     before = state.project.path.model_dump_json()
     cp = ControlPoint(ra=ra, dec=dec)
     state.project.path.control_points.append(cp)
@@ -238,74 +234,31 @@ def _on_remove_point_sync(
 
 
 def _refresh_overlay_sync(state: AppState) -> None:
-    """Compute pixel positions from cached camera and push to JS overlay.
+    """Send path data to JS overlay (projection done client-side).
 
     Args:
         state: Application state with path and capture points.
     """
-    cam = state.last_camera
-    w = int(cam.get("canvas_width", 800))
-    h = int(cam.get("canvas_height", 600))
-    yaw = cam.get("yaw", 0.0)
-    pitch = cam.get("pitch", 0.0)
-    fov = cam.get("fov", 60.0)
-
-    cp_data = _project_control_points(state, w, h, yaw, pitch, fov)
-    cap_data = _project_capture_points(state, w, h, yaw, pitch, fov)
-
+    cp_data = [
+        {
+            "ra": cp.ra, "dec": cp.dec, "label": cp.label,
+            "handleIn": (
+                {"ra": cp.handle_in.ra, "dec": cp.handle_in.dec}
+                if cp.handle_in else None
+            ),
+            "handleOut": (
+                {"ra": cp.handle_out.ra, "dec": cp.handle_out.dec}
+                if cp.handle_out else None
+            ),
+        }
+        for cp in state.project.path.control_points
+    ]
+    cap_data = [
+        {"ra": p.ra, "dec": p.dec, "index": p.index}
+        for p in state.project.capture_points
+    ]
     js = (
         "window.pathOverlayBridge?.update("
         f"{json.dumps(cp_data)}, {json.dumps(cap_data)})"
     )
     ui.run_javascript(js)
-
-
-def _project_control_points(
-    state: AppState,
-    w: int, h: int,
-    yaw: float, pitch: float, fov: float,
-) -> list[dict[str, Any]]:
-    """Project control points to screen pixels."""
-    from src.starmap.projection import radec_to_pixel
-
-    result = []
-    for cp in state.project.path.control_points:
-        px, py = radec_to_pixel(cp.ra, cp.dec, w, h, yaw, pitch, fov)
-        entry: dict[str, Any] = {
-            "ra": cp.ra, "dec": cp.dec, "label": cp.label,
-            "sx": px, "sy": py,
-            "handleIn": None, "handleOut": None,
-        }
-        if cp.handle_in:
-            hx, hy = radec_to_pixel(
-                cp.handle_in.ra, cp.handle_in.dec, w, h, yaw, pitch, fov,
-            )
-            entry["handleIn"] = {"ra": cp.handle_in.ra, "dec": cp.handle_in.dec, "sx": hx, "sy": hy}
-        if cp.handle_out:
-            hx, hy = radec_to_pixel(
-                cp.handle_out.ra, cp.handle_out.dec, w, h, yaw, pitch, fov,
-            )
-            entry["handleOut"] = {
-                "ra": cp.handle_out.ra, "dec": cp.handle_out.dec,
-                "sx": hx, "sy": hy,
-            }
-        result.append(entry)
-    return result
-
-
-def _project_capture_points(
-    state: AppState,
-    w: int, h: int,
-    yaw: float, pitch: float, fov: float,
-) -> list[dict[str, Any]]:
-    """Project capture points to screen pixels."""
-    from src.starmap.projection import radec_to_pixel
-
-    return [
-        {
-            "ra": p.ra, "dec": p.dec, "index": p.index,
-            "sx": radec_to_pixel(p.ra, p.dec, w, h, yaw, pitch, fov)[0],
-            "sy": radec_to_pixel(p.ra, p.dec, w, h, yaw, pitch, fov)[1],
-        }
-        for p in state.project.capture_points
-    ]

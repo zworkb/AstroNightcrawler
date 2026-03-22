@@ -20,15 +20,10 @@ from src.models.undo import UndoStack
 
 
 def _default_project() -> Project:
-    """Create a minimal default project with two control points."""
+    """Create an empty default project (no control points yet)."""
     return Project(
         project="Untitled",
-        path=SplinePath(
-            control_points=[
-                ControlPoint(ra=0.0, dec=0.0),
-                ControlPoint(ra=1.0, dec=0.0),
-            ],
-        ),
+        path=SplinePath(control_points=[]),
     )
 
 
@@ -47,7 +42,7 @@ class AppState:
         default_factory=MockINDIClient,
     )
     undo_stack: UndoStack = field(default_factory=UndoStack)
-    current_mode: str = "draw"
+    current_mode: str = "pan"
     last_camera: dict[str, float] = field(default_factory=lambda: {
         "canvas_width": 800, "canvas_height": 600,
         "yaw": 0.0, "pitch": 0.0, "fov": 60.0,

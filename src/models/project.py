@@ -51,10 +51,8 @@ class SplinePath(BaseModel):
     @field_validator("control_points")
     @classmethod
     def validate_min_points(cls, v: list[ControlPoint]) -> list[ControlPoint]:
-        """Ensure the path has at least two control points."""
-        if len(v) < 2:
-            msg = "A spline path requires at least 2 control points"
-            raise ValueError(msg)
+        """Validate control points (1 point is allowed during editing)."""
+        # Allow 0-1 points during editing; capture requires ≥2.
         return v
 
 

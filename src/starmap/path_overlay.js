@@ -25,7 +25,7 @@ window.pathOverlayBridge = (() => {
     let svg = null;
 
     /** @type {string} Current interaction mode. */
-    let mode = "draw";
+    let mode = "pan";
 
     /** @type {Array<object>} Current control points with handles. */
     let controlPoints = [];
@@ -105,20 +105,93 @@ window.pathOverlayBridge = (() => {
      * @param {number} dec
      * @returns {{x: number, y: number}|null}
      */
-    function toScreen(ra, dec) {
-        if (!window.stelBridge) return null;
-        return window.stelBridge.worldToScreen(ra, dec);
+    /**
+     * Stereographic projection: azalt → screen pixels.
+     * Uses camera state (yaw=azimuth, pitch=altitude, fov).
+     * @param {number} az  - Azimuth in degrees (same frame as camera yaw).
+     * @param {number} alt - Altitude in degrees (same frame as camera pitch).
+     * @returns {{x: number, y: number}|null}
+     */
+    let _logCounter = 0;
+
+    function toScreen(az, alt) {
+        const cam = window.stelBridge?.getCameraState();
+        if (!cam || !cam.canvas_width) return null;
+
+        const D = Math.PI / 180;
+        const az0 = cam.yaw * D;
+        const alt0 = cam.pitch * D;
+        const azR = az * D;
+        const altR = alt * D;
+
+        const cosAlt = Math.cos(altR);
+        const sinAlt = Math.sin(altR);
+        const cosAlt0 = Math.cos(alt0);
+        const sinAlt0 = Math.sin(alt0);
+        const daz = azR - az0;
+        const cosDaz = Math.cos(daz);
+
+        const cosC = sinAlt0 * sinAlt + cosAlt0 * cosAlt * cosDaz;
+        if (cosC <= 0.01) return null;
+
+        const k = 2.0 / (1.0 + cosC);
+        const px = k * cosAlt * Math.sin(daz);
+        const py = k * (cosAlt0 * sinAlt - sinAlt0 * cosAlt * cosDaz);
+
+        const scale = cam.canvas_height / (cam.fov * D * 2);
+        const sx = cam.canvas_width / 2 + px * scale;
+        const sy = cam.canvas_height / 2 - py * scale;
+
+        if (_logCounter++ < 20) {
+            console.log(`toScreen(az=${az.toFixed(2)}, alt=${alt.toFixed(2)})` +
+                ` cam(yaw=${cam.yaw.toFixed(2)}, pitch=${cam.pitch.toFixed(2)},` +
+                ` fov=${cam.fov.toFixed(2)}, ${cam.canvas_width}x${cam.canvas_height})` +
+                ` → (${sx.toFixed(1)}, ${sy.toFixed(1)})`);
+        }
+
+        return { x: sx, y: sy };
     }
 
     /**
-     * Project screen pixels to world coordinates via stelBridge.
-     * @param {number} x
-     * @param {number} y
-     * @returns {{ra: number, dec: number}|null}
+     * Inverse stereographic projection: screen pixels → azalt.
+     * @param {number} x - Pixel x.
+     * @param {number} y - Pixel y.
+     * @returns {{ra: number, dec: number}|null} (named ra/dec but actually az/alt)
      */
     function toWorld(x, y) {
-        if (!window.stelBridge) return null;
-        return window.stelBridge.screenToWorld(x, y);
+        const cam = window.stelBridge?.getCameraState();
+        if (!cam || !cam.canvas_width) return null;
+
+        const D = Math.PI / 180;
+        const az0 = cam.yaw * D;
+        const alt0 = cam.pitch * D;
+
+        const scale = cam.canvas_height / (cam.fov * D * 2);
+        const px = (x - cam.canvas_width / 2) / scale;
+        const py = -(y - cam.canvas_height / 2) / scale;
+
+        const rho = Math.sqrt(px * px + py * py);
+        if (rho === 0) return { ra: cam.yaw, dec: cam.pitch };
+
+        const c = 2 * Math.atan(rho / 2);
+        const cosC = Math.cos(c);
+        const sinC = Math.sin(c);
+        const cosAlt0 = Math.cos(alt0);
+        const sinAlt0 = Math.sin(alt0);
+
+        const alt = Math.asin(cosC * sinAlt0 + py * sinC * cosAlt0 / rho);
+        const az = az0 + Math.atan2(
+            px * sinC,
+            rho * cosAlt0 * cosC - py * sinAlt0 * sinC,
+        );
+
+        const result = {
+            ra: ((az / D) % 360 + 360) % 360,
+            dec: alt / D,
+        };
+        console.log(`toWorld(${x}, ${y}) cam(yaw=${cam.yaw.toFixed(2)},` +
+            ` pitch=${cam.pitch.toFixed(2)}) → az=${result.ra.toFixed(2)}, alt=${result.dec.toFixed(2)}`);
+        return result;
     }
 
     // ------------------------------------------------------------------
@@ -174,15 +247,12 @@ window.pathOverlayBridge = (() => {
     function buildPathD() {
         if (controlPoints.length < 2) return "";
 
-        // Use pre-computed screen positions (sx, sy) from Python.
         const pts = controlPoints.map((cp) => {
-            const s = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
+            const s = toScreen(cp.ra, cp.dec);
             const hIn = cp.handleIn
-                ? ((cp.handleIn.sx != null) ? {x: cp.handleIn.sx, y: cp.handleIn.sy} : toScreen(cp.handleIn.ra, cp.handleIn.dec))
-                : s;
+                ? toScreen(cp.handleIn.ra, cp.handleIn.dec) : s;
             const hOut = cp.handleOut
-                ? ((cp.handleOut.sx != null) ? {x: cp.handleOut.sx, y: cp.handleOut.sy} : toScreen(cp.handleOut.ra, cp.handleOut.dec))
-                : s;
+                ? toScreen(cp.handleOut.ra, cp.handleOut.dec) : s;
             return { s, hIn, hOut };
         });
 
@@ -223,13 +293,13 @@ window.pathOverlayBridge = (() => {
      */
     function renderHandles() {
         for (const cp of controlPoints) {
-            const anchor = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
+            const anchor = toScreen(cp.ra, cp.dec);
             if (!anchor) continue;
 
             for (const hKey of ["handleIn", "handleOut"]) {
                 if (!cp[hKey]) continue;
                 const hd = cp[hKey];
-                const h = (hd.sx != null) ? {x: hd.sx, y: hd.sy} : toScreen(hd.ra, hd.dec);
+                const h = toScreen(hd.ra, hd.dec);
                 if (!h) continue;
 
                 // Line from control point to handle.
@@ -264,7 +334,7 @@ window.pathOverlayBridge = (() => {
     function renderCapturePoints() {
         for (let i = 0; i < capturePoints.length; i++) {
             const cp = capturePoints[i];
-            const s = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
+            const s = toScreen(cp.ra, cp.dec);
             if (!s) continue;
 
             const circle = svgEl("circle", {
@@ -286,7 +356,7 @@ window.pathOverlayBridge = (() => {
     function renderControlPointDots() {
         for (let i = 0; i < controlPoints.length; i++) {
             const cp = controlPoints[i];
-            const s = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
+            const s = toScreen(cp.ra, cp.dec);
             if (!s) continue;
 
             const circle = svgEl("circle", {
@@ -311,7 +381,7 @@ window.pathOverlayBridge = (() => {
     function renderHighlight(index) {
         if (index < 0 || index >= capturePoints.length) return;
         const cp = capturePoints[index];
-        const s = (cp.sx != null) ? {x: cp.sx, y: cp.sy} : toScreen(cp.ra, cp.dec);
+        const s = toScreen(cp.ra, cp.dec);
         if (!s) return;
 
         const ring = svgEl("circle", {
@@ -569,6 +639,18 @@ window.pathOverlayBridge = (() => {
             injectStyles();
             svg = createSVG(container);
             setupInteraction();
+
+            // Continuously re-render so points follow camera movement.
+            let lastCam = "";
+            setInterval(() => {
+                const cam = window.stelBridge?.getCameraState();
+                if (!cam) return;
+                const key = `${cam.yaw},${cam.pitch},${cam.fov}`;
+                if (key !== lastCam) {
+                    lastCam = key;
+                    render();
+                }
+            }, 100);
         },
 
         /**
@@ -578,16 +660,17 @@ window.pathOverlayBridge = (() => {
          */
         setMode(newMode) {
             mode = newMode;
-            // Reset drag / freehand state on mode change.
             dragging = false;
             dragIndex = null;
             freehandActive = false;
             freehandPoints = [];
-            // In draw mode, let clicks pass through to the engine
+            // Pan & Draw: SVG transparent (clicks go to canvas/engine)
+            // Other modes: SVG captures clicks (move points, remove, etc.)
             if (svg) {
-                svg.style.pointerEvents =
-                    (mode === "draw") ? "none" : "all";
+                const passThrough = (mode === "pan" || mode === "draw");
+                svg.style.pointerEvents = passThrough ? "none" : "all";
             }
+            console.log("pathOverlay: mode =", mode);
         },
 
         /**
@@ -611,6 +694,11 @@ window.pathOverlayBridge = (() => {
         highlightPoint(index) {
             highlightedIndex = index;
             render();
+        },
+
+        /** @private Expose toWorld for bridge.js click handling. */
+        _toWorld(x, y) {
+            return toWorld(x, y);
         },
     };
 })();

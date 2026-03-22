@@ -64,6 +64,7 @@ class ToolbarComponent:
     def _render_drawing_tools(self) -> None:
         """Render drawing tool buttons."""
         tools = [
+            ("pan_tool", "Pan"),
             ("draw", "Draw"),
             ("gesture", "Freehand"),
             ("open_with", "Move"),
@@ -165,9 +166,7 @@ class ToolbarComponent:
 
     def _mode_action(self, name: str) -> Callable[[], None]:
         """Return a callback that sets the drawing mode."""
-        mode = _MODE_MAP.get(name)
-        if mode is None:
-            return lambda: None
+        mode = _MODE_MAP.get(name, name)
 
         def _set_mode() -> None:
             self.state.current_mode = mode

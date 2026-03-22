@@ -61,13 +61,16 @@ window.stelBridge = (() => {
         if (!engine || !engine.core) return null;
         try {
             const canvas = container?.querySelector("canvas");
-            return {
+            // Use CSS pixels (clientWidth/Height) to match click coordinates.
+            // canvas.width/height are device pixels (scaled by devicePixelRatio).
+            const state = {
                 fov: engine.core.fov * (180 / Math.PI),
                 yaw: engine.core.observer.yaw * (180 / Math.PI),
                 pitch: engine.core.observer.pitch * (180 / Math.PI),
-                canvas_width: canvas?.width || 0,
-                canvas_height: canvas?.height || 0,
+                canvas_width: canvas?.clientWidth || canvas?.width || 0,
+                canvas_height: canvas?.clientHeight || canvas?.height || 0,
             };
+            return state;
         } catch (_) {
             return null;
         }
@@ -85,18 +88,18 @@ window.stelBridge = (() => {
         }
 
         canvas.addEventListener("click", (evt) => {
-            // Only handle clicks when drawing mode is active
             if (!drawModeActive) return;
             const rect = canvas.getBoundingClientRect();
             const x = Math.round(evt.clientX - rect.left);
             const y = Math.round(evt.clientY - rect.top);
-            const cam = getCameraState();
-            if (cam) {
-                console.log("stelBridge: draw click at", x, y);
+            // Use the overlay's toWorld to get az/alt coords
+            const coords = window.pathOverlayBridge?._toWorld(x, y);
+            if (coords) {
+                console.log("stelBridge: draw click →", coords);
                 el.dispatchEvent(
                     new CustomEvent("map_click", {
                         bubbles: true,
-                        detail: { x, y, ...cam },
+                        detail: { ra: coords.ra, dec: coords.dec, x, y },
                     })
                 );
             }
