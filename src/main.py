@@ -27,7 +27,12 @@ def index() -> None:
     create_layout()
 
 
-ui.run_with(app, title="Sequence Planner", dark=True)
+ui.run_with(
+    app,
+    title="Sequence Planner",
+    dark=True,
+    reconnect_timeout=10.0,
+)
 
 
 def main() -> None:
