@@ -69,6 +69,10 @@ window.stelBridge = (() => {
                 pitch: engine.core.observer.pitch * (180 / Math.PI),
                 canvas_width: canvas?.clientWidth || canvas?.width || 0,
                 canvas_height: canvas?.clientHeight || canvas?.height || 0,
+                // Observer data for coordinate conversion
+                observer_lat: engine.core.observer.latitude * (180 / Math.PI),
+                observer_lon: engine.core.observer.longitude * (180 / Math.PI),
+                observer_utc: engine.core.observer.utc,  // MJD
             };
             return state;
         } catch (_) {
@@ -94,12 +98,18 @@ window.stelBridge = (() => {
             const y = Math.round(evt.clientY - rect.top);
             // Use the overlay's toWorld to get az/alt coords
             const coords = window.pathOverlayBridge?._toWorld(x, y);
-            if (coords) {
+            const cam = getCameraState();
+            if (coords && cam) {
                 console.log("stelBridge: draw click →", coords);
                 el.dispatchEvent(
                     new CustomEvent("map_click", {
                         bubbles: true,
-                        detail: { ra: coords.ra, dec: coords.dec, x, y },
+                        detail: {
+                            ra: coords.ra, dec: coords.dec, x, y,
+                            observer_lat: cam.observer_lat,
+                            observer_lon: cam.observer_lon,
+                            observer_utc: cam.observer_utc,
+                        },
                     })
                 );
             }

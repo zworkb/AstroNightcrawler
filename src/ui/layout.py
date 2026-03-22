@@ -11,6 +11,7 @@ from src.app_state import AppState
 from src.models.freehand import fit_bezier_to_points, rdp_simplify
 from src.models.project import ControlPoint, Coordinate, SplinePath
 from src.starmap.engine import StarMap
+from src.starmap.projection import azalt_to_radec
 from src.ui.bottom_panel import BottomPanelComponent
 from src.ui.capture_view import CaptureViewComponent
 from src.ui.overlay_sync import refresh_overlay
@@ -176,8 +177,10 @@ def _on_map_click_sync(
     if "ra" not in detail:
         return
 
-    ra = float(detail["ra"])
-    dec = float(detail["dec"])
+    az = float(detail["ra"])   # toWorld() returns Az/Alt, not true RA/Dec
+    alt = float(detail["dec"])
+    ra, dec = _convert_azalt(az, alt, detail)
+    _store_observer(state, detail)
     before = state.project.path.model_dump_json()
     cp = ControlPoint(ra=ra, dec=dec)
     state.project.path.control_points.append(cp)
@@ -205,9 +208,13 @@ def _on_point_moved_sync(
     idx = detail.get("index", 0)
     cps = state.project.path.control_points
     if 0 <= idx < len(cps):
+        az = float(detail["ra"])
+        alt = float(detail["dec"])
+        ra, dec = _convert_azalt(az, alt, detail)
+        _store_observer(state, detail)
         before = state.project.path.model_dump_json()
-        cps[idx].ra = float(detail["ra"])
-        cps[idx].dec = float(detail["dec"])
+        cps[idx].ra = ra
+        cps[idx].dec = dec
         after = state.project.path.model_dump_json()
         state.undo_stack.push(before, after)
         state.update_capture_points()
@@ -230,8 +237,11 @@ def _on_freehand_sync(
     raw_points = detail.get("points", [])
     if len(raw_points) < 2:
         return
+    _store_observer(state, detail)
     before = state.project.path.model_dump_json()
-    tuples = [(p["ra"], p["dec"]) for p in raw_points]
+    tuples = [
+        _convert_azalt(p["ra"], p["dec"], detail) for p in raw_points
+    ]
     simplified = rdp_simplify(tuples, epsilon=0.1)
     if len(simplified) < 2:
         return
@@ -286,8 +296,12 @@ def _on_handle_moved_sync(
     handle_type = detail.get("handleType", "out")
     cps = state.project.path.control_points
     if 0 <= idx < len(cps):
+        az = float(detail["ra"])
+        alt = float(detail["dec"])
+        ra, dec = _convert_azalt(az, alt, detail)
+        _store_observer(state, detail)
         before = state.project.path.model_dump_json()
-        coord = Coordinate(ra=float(detail["ra"]), dec=float(detail["dec"]))
+        coord = Coordinate(ra=ra, dec=dec)
         if handle_type == "in":
             cps[idx].handle_in = coord
         else:
@@ -297,5 +311,47 @@ def _on_handle_moved_sync(
         state.update_capture_points()
         panel.refresh()
         refresh_overlay(state)
+
+
+def _convert_azalt(
+    az: float,
+    alt: float,
+    detail: dict[str, Any],
+) -> tuple[float, float]:
+    """Convert Az/Alt from JS toWorld() to true RA/Dec.
+
+    Args:
+        az: Azimuth in degrees from JS overlay.
+        alt: Altitude in degrees from JS overlay.
+        detail: Event detail dict with observer_* keys.
+
+    Returns:
+        Tuple of (ra, dec) in degrees (J2000/ICRS).
+    """
+    obs_lat = float(detail.get("observer_lat", 0))
+    obs_lon = float(detail.get("observer_lon", 0))
+    obs_utc = float(detail.get("observer_utc", 0))
+    return azalt_to_radec(az, alt, obs_lat, obs_lon, obs_utc)
+
+
+def _store_observer(
+    state: AppState,
+    detail: dict[str, Any],
+) -> None:
+    """Persist observer data in last_camera for overlay refresh.
+
+    Args:
+        state: Shared application state.
+        detail: Event detail dict with observer_* keys.
+    """
+    state.last_camera["observer_lat"] = float(
+        detail.get("observer_lat", 0),
+    )
+    state.last_camera["observer_lon"] = float(
+        detail.get("observer_lon", 0),
+    )
+    state.last_camera["observer_utc"] = float(
+        detail.get("observer_utc", 0),
+    )
 
 

@@ -82,6 +82,72 @@ def radec_to_pixel(
     return (float(pixel[0]), float(pixel[1]))
 
 
+def azalt_to_radec(
+    az: float,
+    alt: float,
+    observer_lat: float,
+    observer_lon: float,
+    observer_utc: float,
+) -> tuple[float, float]:
+    """Convert azimuth/altitude to RA/Dec (J2000).
+
+    Args:
+        az: Azimuth in degrees.
+        alt: Altitude in degrees.
+        observer_lat: Observer latitude in degrees.
+        observer_lon: Observer longitude in degrees.
+        observer_utc: Observation time as MJD (Modified Julian Date).
+
+    Returns:
+        Tuple of (ra, dec) in degrees (J2000/ICRS).
+    """
+    import astropy.units as u
+    from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+    from astropy.time import Time
+
+    location = EarthLocation(
+        lat=observer_lat * u.deg, lon=observer_lon * u.deg,
+    )
+    time = Time(observer_utc, format="mjd")
+    altaz_frame = AltAz(obstime=time, location=location)
+    coord = SkyCoord(az=az * u.deg, alt=alt * u.deg, frame=altaz_frame)
+    icrs = coord.icrs
+    return (icrs.ra.deg, icrs.dec.deg)
+
+
+def radec_to_azalt(
+    ra: float,
+    dec: float,
+    observer_lat: float,
+    observer_lon: float,
+    observer_utc: float,
+) -> tuple[float, float]:
+    """Convert RA/Dec (J2000) to azimuth/altitude.
+
+    Args:
+        ra: Right ascension in degrees.
+        dec: Declination in degrees.
+        observer_lat: Observer latitude in degrees.
+        observer_lon: Observer longitude in degrees.
+        observer_utc: Observation time as MJD (Modified Julian Date).
+
+    Returns:
+        Tuple of (az, alt) in degrees.
+    """
+    import astropy.units as u
+    from astropy.coordinates import AltAz, EarthLocation, SkyCoord
+    from astropy.time import Time
+
+    location = EarthLocation(
+        lat=observer_lat * u.deg, lon=observer_lon * u.deg,
+    )
+    time = Time(observer_utc, format="mjd")
+    altaz_frame = AltAz(obstime=time, location=location)
+    coord = SkyCoord(ra=ra * u.deg, dec=dec * u.deg, frame="icrs")
+    altaz = coord.transform_to(altaz_frame)
+    return (altaz.az.deg, altaz.alt.deg)
+
+
 def _build_wcs(
     width: int,
     height: int,

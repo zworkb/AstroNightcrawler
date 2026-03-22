@@ -540,6 +540,19 @@ window.pathOverlayBridge = (() => {
     }
 
     /**
+     * Get observer data from camera state for coordinate conversion.
+     * @returns {{observer_lat: number, observer_lon: number, observer_utc: number}}
+     */
+    function getObserverData() {
+        const cam = window.stelBridge?.getCameraState();
+        return {
+            observer_lat: cam?.observer_lat || 0,
+            observer_lon: cam?.observer_lon || 0,
+            observer_utc: cam?.observer_utc || 0,
+        };
+    }
+
+    /**
      * Set up all mouse interaction handlers on the SVG element.
      * @private
      */
@@ -554,7 +567,7 @@ window.pathOverlayBridge = (() => {
                 if (coords) {
                     container.dispatchEvent(
                         new CustomEvent("path_add_point", {
-                            detail: { ra: coords.ra, dec: coords.dec },
+                            detail: { ra: coords.ra, dec: coords.dec, ...getObserverData() },
                         })
                     );
                 }
@@ -572,6 +585,7 @@ window.pathOverlayBridge = (() => {
                                     segmentIndex: seg.segmentIndex,
                                     ra: coords.ra,
                                     dec: coords.dec,
+                                    ...getObserverData(),
                                 },
                             })
                         );
@@ -675,6 +689,7 @@ window.pathOverlayBridge = (() => {
 
             if (mode === "move" && dragging && dragIndex !== null) {
                 const coords = toWorld(pos.x, pos.y);
+                const obs = getObserverData();
                 if (coords && dragHandleType) {
                     container.dispatchEvent(
                         new CustomEvent("path_handle_moved", {
@@ -683,6 +698,7 @@ window.pathOverlayBridge = (() => {
                                 handleType: dragHandleType,
                                 ra: coords.ra,
                                 dec: coords.dec,
+                                ...obs,
                             },
                         })
                     );
@@ -693,6 +709,7 @@ window.pathOverlayBridge = (() => {
                                 index: dragIndex,
                                 ra: coords.ra,
                                 dec: coords.dec,
+                                ...obs,
                             },
                         })
                     );
@@ -708,7 +725,7 @@ window.pathOverlayBridge = (() => {
                 if (freehandPoints.length > 0) {
                     container.dispatchEvent(
                         new CustomEvent("path_freehand_complete", {
-                            detail: { points: freehandPoints },
+                            detail: { points: freehandPoints, ...getObserverData() },
                         })
                     );
                 }
