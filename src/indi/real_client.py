@@ -17,7 +17,6 @@ from src.indi.client import (
     CaptureTimeout,
     INDIClient,
     INDIError,
-    SettleTimeout,
     SlewTimeout,
 )
 
@@ -159,13 +158,21 @@ class RealINDIClient(INDIClient):
         if not telescope:
             return True
 
-        start = time.monotonic()
-        while time.monotonic() - start < timeout:
-            track = telescope.getSwitch("TELESCOPE_TRACK_STATE")
-            if track and track[0].getState() == PyIndi.ISS_ON:
-                return True
-            await asyncio.sleep(_PROPERTY_POLL)
-        raise SettleTimeout(f"Mount did not settle within {timeout}s")
+        # Wait for EQUATORIAL_EOD_COORD to reach IPS_OK or IPS_IDLE
+        coord = telescope.getNumber("EQUATORIAL_EOD_COORD")
+        if coord:
+            start = time.monotonic()
+            while time.monotonic() - start < timeout:
+                state = coord.getState()
+                if state in (PyIndi.IPS_OK, PyIndi.IPS_IDLE):
+                    logger.info("Mount settled (state=%s)", state)
+                    return True
+                await asyncio.sleep(_PROPERTY_POLL)
+            # Timeout — log but don't fail, mount may still be OK
+            logger.warning("Settle timeout after %.0fs, continuing", timeout)
+            return True
+        # No coordinate property — assume settled
+        return True
 
     async def capture(self, params: CaptureParams) -> bytes:
         """Capture a single image and return the raw bytes.

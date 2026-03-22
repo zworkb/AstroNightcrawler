@@ -121,6 +121,11 @@ class AppState:
         if self.indi_client is None:
             msg = "No INDI client connected. Use Connect first."
             raise RuntimeError(msg)
+        # Ensure capture points are up to date
+        self.update_capture_points()
+        if len(self.project.capture_points) < 2:
+            msg = "Need at least 2 capture points"
+            raise RuntimeError(msg)
         output = Path(settings.output_dir)
         output.mkdir(parents=True, exist_ok=True)
         return CaptureController(
