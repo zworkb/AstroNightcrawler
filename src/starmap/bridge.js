@@ -36,6 +36,44 @@ window.stelBridge = (() => {
     }
 
     /**
+     * Approximate Az/Alt to RA/Dec conversion.
+     * Good enough for cursor display (~0.1° accuracy).
+     * @param {number} az  - Azimuth in degrees.
+     * @param {number} alt - Altitude in degrees.
+     * @param {number} lat - Observer latitude in degrees.
+     * @param {number} lon - Observer longitude in degrees.
+     * @param {number} mjd - Modified Julian Date (UTC).
+     * @returns {{ra: number, dec: number}} RA and Dec in degrees.
+     */
+    function azaltToRaDec(az, alt, lat, lon, mjd) {
+        const D = Math.PI / 180;
+        const azR = az * D;
+        const altR = alt * D;
+        const latR = lat * D;
+
+        // Approximate Local Sidereal Time from MJD
+        // LST ≈ 280.46061837 + 360.98564736629 * (MJD - 51544.5) + lon
+        const lst = (280.46061837 + 360.98564736629 * (mjd - 51544.5) + lon) % 360;
+        const lstR = lst * D;
+
+        // Alt/Az to Hour Angle / Dec
+        const sinDec = Math.sin(altR) * Math.sin(latR) +
+                       Math.cos(altR) * Math.cos(latR) * Math.cos(azR);
+        const dec = Math.asin(sinDec);
+
+        const cosHA = (Math.sin(altR) - Math.sin(latR) * sinDec) /
+                      (Math.cos(latR) * Math.cos(dec));
+        let ha = Math.acos(Math.max(-1, Math.min(1, cosHA)));
+        if (Math.sin(azR) > 0) ha = 2 * Math.PI - ha;
+
+        // RA = LST - HA
+        let ra = (lstR - ha) / D;
+        ra = ((ra % 360) + 360) % 360;
+
+        return { ra: ra, dec: dec / D };
+    }
+
+    /**
      * Create (or return existing) coordinate overlay element.
      * @param {HTMLElement} parent - Container to append the overlay to.
      * @returns {HTMLDivElement} The overlay element.
@@ -120,7 +158,33 @@ window.stelBridge = (() => {
             const x = Math.round(evt.clientX - rect.left);
             const y = Math.round(evt.clientY - rect.top);
             const overlay = ensureOverlay(el);
-            overlay.textContent = `Pixel: ${x}, ${y}`;
+
+            // Get Az/Alt from overlay's projection
+            const azalt = window.pathOverlayBridge?._toWorld(x, y);
+            const cam = getCameraState();
+
+            if (azalt && cam && cam.observer_lat !== undefined) {
+                const radec = azaltToRaDec(
+                    azalt.ra, azalt.dec,
+                    cam.observer_lat, cam.observer_lon, cam.observer_utc
+                );
+                // Format RA as hours (0-24h) and Dec as degrees
+                const raH = radec.ra / 15;
+                const raHH = Math.floor(raH);
+                const raMM = Math.floor((raH - raHH) * 60);
+                const raSS = ((raH - raHH) * 60 - raMM) * 60;
+                const decSign = radec.dec >= 0 ? "+" : "-";
+                const decAbs = Math.abs(radec.dec);
+                const decDD = Math.floor(decAbs);
+                const decMM = Math.floor((decAbs - decDD) * 60);
+                const decSS = ((decAbs - decDD) * 60 - decMM) * 60;
+
+                overlay.textContent =
+                    `RA ${raHH}h ${raMM}m ${raSS.toFixed(0)}s | ` +
+                    `Dec ${decSign}${decDD}\u00B0 ${decMM}' ${decSS.toFixed(0)}"`;
+            } else {
+                overlay.textContent = `Pixel: ${x}, ${y}`;
+            }
         });
     }
 
