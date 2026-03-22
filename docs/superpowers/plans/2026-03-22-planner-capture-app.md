@@ -115,6 +115,9 @@ indi = [
     "pyindi-client>=2.0",
 ]
 
+[project.scripts]
+sequence-planner = "src.main:main"
+
 [build-system]
 requires = ["setuptools>=68.0"]
 build-backend = "setuptools.build_meta"
@@ -514,9 +517,14 @@ def index() -> None:
 ui.run_with(app, title="Sequence Planner", dark=True)
 
 
-if __name__ == "__main__":
+def main() -> None:
+    """Entry point for `sequence-planner` console script."""
     import uvicorn
     uvicorn.run("src.main:app", host="0.0.0.0", port=8080, reload=False)
+
+
+if __name__ == "__main__":
+    main()
 ```
 
 - [ ] **Step 3: Create toolbar component**
