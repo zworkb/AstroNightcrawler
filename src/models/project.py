@@ -65,10 +65,10 @@ class CaptureSettings(BaseModel):
         default=0.5, description="Spacing between capture points in degrees"
     )
     exposure_seconds: float = Field(default=30.0, description="Exposure time per frame in seconds")
-    gain: int = Field(default=100, description="Camera gain setting")
+    gain: int = Field(default=0, ge=0, description="Camera gain setting")
     binning: int = Field(default=1, description="Camera binning (1, 2, 3, or 4)")
-    filter_name: str | None = Field(default=None, description="Optional filter name")
-    dither_radius_arcsec: float = Field(default=0.0, description="Dither radius in arcseconds")
+    exposures_per_point: int = Field(default=1, ge=1, description="Exposures per capture point")
+    offset: int = Field(default=0, ge=0, description="Camera offset setting")
 
     @field_validator("binning")
     @classmethod
@@ -101,8 +101,8 @@ class CaptureSettings(BaseModel):
 class CapturePoint(Coordinate):
     """A point where an image is captured, with status tracking."""
 
-    index: int = Field(description="Zero-based index along the path")
-    status: Literal["pending", "capturing", "complete", "failed"] = Field(
+    index: int = Field(ge=0, description="Zero-based index along the path")
+    status: Literal["pending", "capturing", "captured", "failed", "skipped"] = Field(
         default="pending", description="Capture status"
     )
     files: list[str] = Field(default_factory=list, description="List of captured file paths")

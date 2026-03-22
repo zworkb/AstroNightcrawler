@@ -61,6 +61,22 @@ class TestCaptureSettings:
         assert cs.exposure_seconds == 30.0
         assert cs.binning == 1
 
+    def test_exposures_per_point_default(self) -> None:
+        cs = CaptureSettings()
+        assert cs.exposures_per_point == 1
+
+    def test_offset_default(self) -> None:
+        cs = CaptureSettings()
+        assert cs.offset == 0
+
+    def test_gain_default(self) -> None:
+        cs = CaptureSettings()
+        assert cs.gain == 0
+
+    def test_negative_gain_raises(self) -> None:
+        with pytest.raises(ValueError):
+            CaptureSettings(gain=-1)
+
     def test_invalid_binning_raises(self) -> None:
         with pytest.raises(ValueError):
             CaptureSettings(binning=5)
@@ -92,6 +108,18 @@ class TestCapturePoint:
     def test_invalid_status_raises(self) -> None:
         with pytest.raises(ValueError):
             CapturePoint(index=0, ra=0.0, dec=0.0, status="invalid")
+
+    def test_negative_index_raises(self) -> None:
+        with pytest.raises(ValueError):
+            CapturePoint(index=-1, ra=0.0, dec=0.0)
+
+    def test_status_skipped_valid(self) -> None:
+        cp = CapturePoint(index=0, ra=0.0, dec=0.0, status="skipped")
+        assert cp.status == "skipped"
+
+    def test_status_captured_valid(self) -> None:
+        cp = CapturePoint(index=0, ra=0.0, dec=0.0, status="captured")
+        assert cp.status == "captured"
 
 
 class TestProject:
