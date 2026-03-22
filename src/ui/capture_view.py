@@ -76,7 +76,12 @@ class CaptureViewComponent:
         Args:
             controller: Active capture controller to monitor.
         """
+        import logging
         self._controller = controller
+        total = len(controller.project.capture_points)
+        logging.getLogger("capture").info(
+            "Capture view started: %d points", total,
+        )
         if self._container is not None:
             self._container.set_visibility(True)
         if self._progress is not None:
@@ -99,6 +104,12 @@ class CaptureViewComponent:
         if self._controller is None:
             return
         state = self._controller.state
+        total = len(self._controller.project.capture_points)
+        idx = self._controller.current_point_index
+        import logging
+        logging.getLogger("capture").info(
+            "UI update: state=%s point=%d/%d", state, idx, total,
+        )
         if state in (CaptureState.COMPLETED, CaptureState.CANCELLED):
             self.stop()
             return
