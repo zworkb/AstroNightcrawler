@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.capture.fits_writer import FITSWriter
+from src.config import settings
 from src.indi.client import (
     CaptureParams,
     CaptureTimeout,
@@ -32,8 +33,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-SLEW_TIMEOUT = 120.0
-SETTLE_TIMEOUT = 30.0
+SLEW_TIMEOUT = settings.slew_timeout
+SETTLE_TIMEOUT = settings.settle_timeout
 EST_SLEW_SECONDS = 5.0
 EST_SETTLE_SECONDS = 3.0
 
@@ -229,7 +230,8 @@ class CaptureController:
             offset=settings.offset,
             binning=settings.binning,
         )
-        timeout = settings.exposure_seconds + 30.0
+        from src.config import settings as cfg
+        timeout = settings.exposure_seconds + cfg.capture_timeout_extra
         for i in range(1, settings.exposures_per_point + 1):
             data = await self._capture_single(params, timeout)
             self.writer.write(point, i, data)

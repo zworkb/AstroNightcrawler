@@ -375,7 +375,8 @@ class RealINDIClient(INDIClient):
         self._handler.sendNewNumber(exp_prop)
         logger.info("Exposure started: %.1fs", params.exposure_seconds)
 
-        timeout = params.exposure_seconds + 30.0
+        from src.config import settings
+        timeout = params.exposure_seconds + settings.capture_timeout_extra
         try:
             await asyncio.wait_for(
                 self._handler._blob_event.wait(), timeout=timeout,

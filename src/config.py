@@ -25,6 +25,9 @@ class Settings(BaseSettings):
     observer_lat: float = 48.2  # Vienna default
     observer_lon: float = 16.4
     observer_elevation: float = 200.0
+    slew_timeout: float = 120.0
+    settle_timeout: float = 30.0
+    capture_timeout_extra: float = 30.0  # added to exposure time
 
     model_config = {"env_prefix": "NC_", "env_file": ".env"}
 
