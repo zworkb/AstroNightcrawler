@@ -8,7 +8,8 @@ from typing import Any
 from nicegui import ui
 
 from src.app_state import AppState
-from src.models.project import ControlPoint
+from src.models.freehand import fit_bezier_to_points, rdp_simplify
+from src.models.project import ControlPoint, SplinePath
 from src.starmap.engine import StarMap
 from src.ui.bottom_panel import BottomPanelComponent
 from src.ui.capture_view import CaptureViewComponent
@@ -139,6 +140,12 @@ def _register_path_events(
     ui.on("map_click", lambda e: _on_map_click_sync(
         state, _extract_detail(e), panel,
     ))
+    ui.on("path_point_moved", lambda e: _on_point_moved_sync(
+        state, _extract_detail(e), panel,
+    ))
+    ui.on("path_freehand_complete", lambda e: _on_freehand_sync(
+        state, _extract_detail(e), panel,
+    ))
     ui.on("path_remove_point", lambda e: _on_remove_point_sync(
         state, _extract_detail(e), panel,
     ))
@@ -177,8 +184,60 @@ def _on_map_click_sync(
     refresh_overlay(state)
 
 
-    # NOTE: freehand and move handlers will be added when those modes
-    # are wired up. For now, only draw and remove are active.
+
+
+def _on_point_moved_sync(
+    state: AppState,
+    detail: dict[str, Any],
+    panel: BottomPanelComponent,
+) -> None:
+    """Handle a control point being dragged to a new position (sync).
+
+    Args:
+        state: Shared application state.
+        detail: Event detail with index, ra, dec.
+        panel: Bottom panel to refresh.
+    """
+    idx = detail.get("index", 0)
+    cps = state.project.path.control_points
+    if 0 <= idx < len(cps):
+        before = state.project.path.model_dump_json()
+        cps[idx].ra = float(detail["ra"])
+        cps[idx].dec = float(detail["dec"])
+        after = state.project.path.model_dump_json()
+        state.undo_stack.push(before, after)
+        state.update_capture_points()
+        panel.refresh()
+        refresh_overlay(state)
+
+
+def _on_freehand_sync(
+    state: AppState,
+    detail: dict[str, Any],
+    panel: BottomPanelComponent,
+) -> None:
+    """Handle freehand stroke completion by fitting a spline (sync).
+
+    Args:
+        state: Shared application state.
+        detail: Event detail with points list of {ra, dec}.
+        panel: Bottom panel to refresh.
+    """
+    raw_points = detail.get("points", [])
+    if len(raw_points) < 2:
+        return
+    before = state.project.path.model_dump_json()
+    tuples = [(p["ra"], p["dec"]) for p in raw_points]
+    simplified = rdp_simplify(tuples, epsilon=0.1)
+    if len(simplified) < 2:
+        return
+    cps = fit_bezier_to_points(simplified)
+    state.project.path = SplinePath(control_points=cps)
+    after = state.project.path.model_dump_json()
+    state.undo_stack.push(before, after)
+    state.update_capture_points()
+    panel.refresh()
+    refresh_overlay(state)
 
 
 def _on_remove_point_sync(
