@@ -76,6 +76,7 @@ class _INDIHandler(PyIndi.BaseClient):
         self.devices: dict[str, PyIndi.BaseDevice] = {}
         self._blob_data: bytes | None = None
         self._blob_event = asyncio.Event()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
     # -- device / property callbacks --
 
@@ -96,7 +97,13 @@ class _INDIHandler(PyIndi.BaseClient):
         for i in range(bp.count()):
             blob = bp[i]
             self._blob_data = blob.getblobdata()
-            self._blob_event.set()
+            size = len(self._blob_data) if self._blob_data else 0
+            print(f"BLOB received: {size} bytes")  # noqa: T201
+            # Thread-safe event set via event loop
+            if self._loop and self._loop.is_running():
+                self._loop.call_soon_threadsafe(self._blob_event.set)
+            else:
+                self._blob_event.set()
 
     def newSwitch(self, svp: PyIndi.PropertySwitch) -> None:  # noqa: N802
         """Handle switch update (no-op)."""
@@ -369,6 +376,7 @@ class RealINDIClient(INDIClient):
         """
         self._handler._blob_data = None
         self._handler._blob_event.clear()
+        self._handler._loop = asyncio.get_running_loop()
 
         exp_prop = await self._await_number(camera, "CCD_EXPOSURE")
         exp_prop[0].value = params.exposure_seconds
