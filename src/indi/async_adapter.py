@@ -66,11 +66,13 @@ class AsyncINDIAdapter(INDIClient):
         telescope = self._find_telescope()
         if not telescope:
             return
-        # Check if already unparked
-        state = self._get_vector_state(telescope, "TELESCOPE_PARK")
-        if state == "Idle":
-            logger.info("Mount already unparked")
-            return
+        # Check if already unparked (UNPARK switch is On)
+        vec = self._inner.get_vector(telescope, "TELESCOPE_PARK")
+        if vec:
+            unpark_val = vec.members.get("UNPARK")
+            if unpark_val and unpark_val.value == "On":
+                logger.info("Mount already unparked (UNPARK=On)")
+                return
         try:
             await self._inner.send_switch(
                 telescope, "TELESCOPE_PARK",
