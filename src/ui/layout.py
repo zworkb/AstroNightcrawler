@@ -75,7 +75,10 @@ def create_layout() -> None:
         with ui.row().classes("w-full").style("position:absolute;top:0;left:0;right:0;z-index:20"):
             toolbar = ToolbarComponent(state, callbacks)
             toolbar.render()
-        capture_view.render()
+        with ui.element("div").style(
+            "position:absolute;top:48px;left:0;right:0;z-index:15"
+        ):
+            capture_view.render()
         with ui.element("div").classes("map-container"):
             star_map = StarMap(width="100%", height="100%")
 
