@@ -37,3 +37,7 @@ htmlcov/
 # Environment
 .env
 .nicegui/
+
+# mxmake build artifacts
+.mxmake/
+requirements-mxdev.txt
