@@ -156,6 +156,11 @@ class AppState:
         if len(self.project.capture_points) < 2:
             msg = "Need at least 2 capture points"
             raise RuntimeError(msg)
+        # Reset point status so a new run captures all points
+        for pt in self.project.capture_points:
+            pt.status = "pending"
+            pt.files = []
+            pt.captured_at = None
         output = _resolve_output_dir(self.project)
         return CaptureController(
             project=self.project,
