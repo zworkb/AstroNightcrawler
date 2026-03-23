@@ -21,10 +21,11 @@ _HEAD_CSS = (
     "<style>"
     "body{margin:0;overflow:hidden}"
     " .map-container{flex:1;position:relative;"
-    "background:#0a0a19;min-height:0;overflow:hidden}"
+    "background:#0a0a19;min-height:200px;overflow:hidden}"
     " .map-container>div{height:100%!important}"
     " .map-container>div>div{height:100%!important}"
     " .map-container canvas{width:100%!important;height:100%!important}"
+    " .bottom-panel{flex-shrink:0;max-height:50vh;overflow-y:auto}"
     "</style>"
 )
 
