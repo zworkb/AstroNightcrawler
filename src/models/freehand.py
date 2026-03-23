@@ -5,6 +5,11 @@ import math
 from src.models.project import ControlPoint, Coordinate
 
 
+def _wrap_ra(ra: float) -> float:
+    """Normalize RA to 0..360 range."""
+    return ra % 360.0
+
+
 def _perpendicular_distance(
     point: tuple[float, float],
     line_start: tuple[float, float],
@@ -100,7 +105,7 @@ def fit_bezier_to_points(
             seg_len = math.hypot(points[1][0] - pt[0], points[1][1] - pt[1])
             scale = seg_len / 3.0
             handle_out = Coordinate(
-                ra=pt[0] + tang[0] * scale,
+                ra=_wrap_ra(pt[0] + tang[0] * scale),
                 dec=pt[1] + tang[1] * scale,
             )
         elif i == n - 1:
@@ -108,7 +113,7 @@ def fit_bezier_to_points(
             seg_len = math.hypot(pt[0] - points[-2][0], pt[1] - points[-2][1])
             scale = seg_len / 3.0
             handle_in = Coordinate(
-                ra=pt[0] - tang[0] * scale,
+                ra=_wrap_ra(pt[0] - tang[0] * scale),
                 dec=pt[1] - tang[1] * scale,
             )
         else:
@@ -116,11 +121,11 @@ def fit_bezier_to_points(
             seg_in = math.hypot(pt[0] - points[i - 1][0], pt[1] - points[i - 1][1])
             seg_out = math.hypot(points[i + 1][0] - pt[0], points[i + 1][1] - pt[1])
             handle_in = Coordinate(
-                ra=pt[0] - tang[0] * seg_in / 3.0,
+                ra=_wrap_ra(pt[0] - tang[0] * seg_in / 3.0),
                 dec=pt[1] - tang[1] * seg_in / 3.0,
             )
             handle_out = Coordinate(
-                ra=pt[0] + tang[0] * seg_out / 3.0,
+                ra=_wrap_ra(pt[0] + tang[0] * seg_out / 3.0),
                 dec=pt[1] + tang[1] * seg_out / 3.0,
             )
 
