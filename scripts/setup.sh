@@ -79,11 +79,10 @@ if command -v uv &>/dev/null; then
 fi
 
 install_deps() {
-    local spec="$1"
     if [ "$USE_UV" = true ]; then
-        uv pip install --python "$PY" $spec
+        uv pip install --python "$PY" "$@"
     else
-        "$PIP" install --quiet $spec
+        "$PIP" install --quiet "$@"
     fi
 }
 
@@ -97,10 +96,10 @@ else
     echo -n "  Installing dependencies"
     if [ "$USE_UV" = true ]; then
         echo " (via uv)..."
-        install_deps '-e ".[dev]"'
+        install_deps -e '.[dev]'
     else
         echo " (via pip)..."
-        install_deps '-e ".[dev]"'
+        install_deps -e '.[dev]'
     fi
     ok "Dependencies — installed"
 fi
@@ -110,7 +109,7 @@ DEV_OK=true
 "$PY" -c "import pytest, ruff, mypy" 2>/dev/null || DEV_OK=false
 if [ "$DEV_OK" = false ]; then
     echo "  Installing dev tools..."
-    install_deps '".[dev]"'
+    install_deps '.[dev]'
     ok "Dev tools — installed"
 else
     ok "Dev tools (pytest, ruff, mypy) — available"
