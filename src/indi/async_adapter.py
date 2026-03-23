@@ -84,7 +84,8 @@ class AsyncINDIAdapter(INDIClient):
             while elapsed < 15.0:
                 s = self._get_vector_state(telescope, "TELESCOPE_PARK")
                 if s in ("Ok", "Idle"):
-                    logger.info("Unpark complete (state=%s)", s)
+                    logger.info("Unpark complete (state=%s), waiting 3s", s)
+                    await asyncio.sleep(3.0)
                     return
                 await asyncio.sleep(_POLL_INTERVAL)
                 elapsed += _POLL_INTERVAL
