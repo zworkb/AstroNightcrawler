@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     settle_delay: float = 3.0
     settle_timeout: float = 30.0
     capture_timeout_extra: float = 60.0  # added to exposure time (DSLR needs more)
+    unpark_delay: float = 3.0  # seconds to wait after unpark before first slew
 
     model_config = {"env_prefix": "NC_", "env_file": ".env"}
 
