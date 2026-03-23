@@ -61,6 +61,21 @@ class AsyncINDIAdapter(INDIClient):
         await self._inner.disconnect()
         logger.info("Disconnected from INDI server")
 
+    async def unpark(self) -> None:
+        """Unpark the telescope mount before capturing."""
+        telescope = self._find_telescope()
+        if not telescope:
+            return
+        try:
+            await self._inner.send_switch(
+                telescope, "TELESCOPE_PARK",
+                {"UNPARK": "On", "PARK": "Off"},
+            )
+            logger.info("Unpark sent to %s", telescope)
+            await asyncio.sleep(1.0)
+        except Exception:  # noqa: BLE001
+            logger.warning("Unpark failed (mount may not support it)")
+
     async def slew_to(self, ra: float, dec: float) -> None:
         """Slew the telescope to the given coordinates.
 

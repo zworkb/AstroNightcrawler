@@ -96,6 +96,9 @@ class CaptureController:
         """
         self._loop = asyncio.get_running_loop()
         self.state = CaptureState.RUNNING
+        # Unpark mount before starting the sequence
+        if hasattr(self.indi, "unpark"):
+            await self.indi.unpark()
         points = self.project.capture_points
         while self.current_point_index < len(points):
             if self._cancel_flag:
