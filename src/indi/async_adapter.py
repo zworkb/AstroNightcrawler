@@ -101,7 +101,11 @@ class AsyncINDIAdapter(INDIClient):
                 telescope, "EQUATORIAL_EOD_COORD",
             )
             if state in ("Ok", "Idle"):
-                logger.info("Mount settled (state=%s)", state)
+                logger.info(
+                    "Mount settled (state=%s), waiting %.1fs settle delay",
+                    state, settings.settle_delay,
+                )
+                await asyncio.sleep(settings.settle_delay)
                 return True
             await asyncio.sleep(_POLL_INTERVAL)
             elapsed += _POLL_INTERVAL

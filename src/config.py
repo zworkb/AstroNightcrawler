@@ -15,6 +15,7 @@ class Settings(BaseSettings):
         output_dir: Directory for FITS output files.
         indi_host: INDI server hostname.
         indi_port: INDI server port.
+        settle_delay: Seconds to pause after slew before capture.
     """
 
     host: str = "0.0.0.0"
@@ -26,6 +27,7 @@ class Settings(BaseSettings):
     observer_lon: float = 16.4
     observer_elevation: float = 200.0
     slew_timeout: float = 120.0
+    settle_delay: float = 3.0
     settle_timeout: float = 30.0
     capture_timeout_extra: float = 60.0  # added to exposure time (DSLR needs more)
 
