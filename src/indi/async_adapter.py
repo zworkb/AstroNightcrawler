@@ -259,6 +259,9 @@ class AsyncINDIAdapter(INDIClient):
     ) -> None:
         """Poll a vector state until Ok, or raise on timeout/alert.
 
+        First waits for state to leave Ok/Idle (operation started),
+        then waits for it to return to Ok (operation complete).
+
         Args:
             device: INDI device name.
             vector: Property vector name.
@@ -266,6 +269,16 @@ class AsyncINDIAdapter(INDIClient):
             exc_cls: Exception class to raise on failure.
         """
         elapsed = 0.0
+        # Phase 1: wait for Busy (operation started)
+        while elapsed < min(timeout, 5.0):
+            state = self._get_vector_state(device, vector)
+            if state == "Busy":
+                break
+            if state == "Alert":
+                raise exc_cls("Operation failed (Alert state)")
+            await asyncio.sleep(_POLL_INTERVAL)
+            elapsed += _POLL_INTERVAL
+        # Phase 2: wait for Ok (operation complete)
         while elapsed < timeout:
             state = self._get_vector_state(device, vector)
             if state == "Ok":
