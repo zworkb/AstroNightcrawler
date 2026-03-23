@@ -66,13 +66,27 @@ class AsyncINDIAdapter(INDIClient):
         telescope = self._find_telescope()
         if not telescope:
             return
+        # Check if already unparked
+        state = self._get_vector_state(telescope, "TELESCOPE_PARK")
+        if state == "Idle":
+            logger.info("Mount already unparked")
+            return
         try:
             await self._inner.send_switch(
                 telescope, "TELESCOPE_PARK",
                 {"UNPARK": "On", "PARK": "Off"},
             )
-            logger.info("Unpark sent to %s", telescope)
-            await asyncio.sleep(1.0)
+            logger.info("Unpark sent to %s, waiting...", telescope)
+            # Wait for unpark to complete (up to 15s)
+            elapsed = 0.0
+            while elapsed < 15.0:
+                s = self._get_vector_state(telescope, "TELESCOPE_PARK")
+                if s in ("Ok", "Idle"):
+                    logger.info("Unpark complete (state=%s)", s)
+                    return
+                await asyncio.sleep(_POLL_INTERVAL)
+                elapsed += _POLL_INTERVAL
+            logger.warning("Unpark timeout after 15s, continuing")
         except Exception:  # noqa: BLE001
             logger.warning("Unpark failed (mount may not support it)")
 
