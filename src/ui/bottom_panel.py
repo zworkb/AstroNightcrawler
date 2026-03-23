@@ -34,10 +34,7 @@ class BottomPanelComponent:
         self._expansion = ui.expansion(
             text=self._summary_text(),
             icon="tune",
-            on_value_change=lambda _: ui.run_javascript(
-                "setTimeout(() => window.dispatchEvent(new Event('resize')), 100)"
-            ),
-        ).classes("w-full bg-dark bottom-panel")
+        ).classes("w-full bottom-panel")
         with self._expansion, ui.row().classes("w-full gap-4 p-2"):
             self._render_path_settings()
             ui.separator().props("vertical")

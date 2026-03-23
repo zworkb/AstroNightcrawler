@@ -20,12 +20,15 @@ from src.ui.toolbar import ToolbarComponent
 _HEAD_CSS = (
     "<style>"
     "body{margin:0;overflow:hidden}"
-    " .map-container{flex:1;position:relative;"
-    "background:#0a0a19;min-height:200px;overflow:hidden}"
+    " .main-layout{position:relative;width:100%;height:100vh;overflow:hidden}"
+    " .map-container{position:absolute;top:48px;left:0;right:0;bottom:0;"
+    "background:#0a0a19;overflow:hidden}"
     " .map-container>div{height:100%!important}"
     " .map-container>div>div{height:100%!important}"
     " .map-container canvas{width:100%!important;height:100%!important}"
-    " .bottom-panel{flex-shrink:0;max-height:50vh;overflow-y:auto}"
+    " .bottom-panel{position:absolute;left:0;right:0;bottom:0;"
+    "z-index:10;max-height:60vh;overflow-y:auto;"
+    "background:rgba(30,30,30,0.95);backdrop-filter:blur(4px)}"
     "</style>"
 )
 
@@ -68,9 +71,10 @@ def create_layout() -> None:
     callbacks = _build_callbacks(state, capture_view)
     ui.add_head_html(_HEAD_CSS)
 
-    with ui.column().classes("w-full h-screen no-wrap"):
-        toolbar = ToolbarComponent(state, callbacks)
-        toolbar.render()
+    with ui.element("div").classes("main-layout"):
+        with ui.row().classes("w-full").style("position:absolute;top:0;left:0;right:0;z-index:20"):
+            toolbar = ToolbarComponent(state, callbacks)
+            toolbar.render()
         capture_view.render()
         with ui.element("div").classes("map-container"):
             star_map = StarMap(width="100%", height="100%")
