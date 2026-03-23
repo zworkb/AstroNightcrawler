@@ -3,9 +3,15 @@
 from pathlib import Path
 
 import pytest
+
 from src.models.project import (
-    Coordinate, ControlPoint, SplinePath,
-    CaptureSettings, CapturePoint, INDIConfig, Project,
+    CapturePoint,
+    CaptureSettings,
+    ControlPoint,
+    Coordinate,
+    INDIConfig,
+    Project,
+    SplinePath,
 )
 
 

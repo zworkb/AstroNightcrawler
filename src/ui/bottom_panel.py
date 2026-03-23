@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from nicegui import ui
@@ -79,6 +80,22 @@ class BottomPanelComponent:
         self.refresh()
         refresh_overlay(self.state)
 
+    def _render_sequence_name(self) -> None:
+        """Render sequence name input with auto-generated placeholder."""
+        cs = self.state.project.capture_settings
+        default = datetime.now().strftime("%Y-%m-%d_%H%M")
+
+        def _on_change(e: object) -> None:
+            val = getattr(e, "value", "")
+            cs.sequence_name = val or ""
+
+        ui.input(
+            label="Sequence Name",
+            value=cs.sequence_name,
+            placeholder=f"auto ({default})",
+            on_change=_on_change,
+        ).classes("w-full")
+
     def _render_path_settings(self) -> None:
         """Render path and capture setting inputs."""
         cs = self.state.project.capture_settings
@@ -108,6 +125,7 @@ class BottomPanelComponent:
                 "Binning", cs.binning,
                 1, 4, 1, "binning", as_int=True,
             )
+            self._render_sequence_name()
             ui.button(
                 "Apply", icon="check",
                 on_click=self._on_apply_settings,

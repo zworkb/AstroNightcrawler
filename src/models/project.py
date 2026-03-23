@@ -64,6 +64,9 @@ class CaptureSettings(BaseModel):
     binning: int = Field(default=1, description="Camera binning (1, 2, 3, or 4)")
     exposures_per_point: int = Field(default=1, ge=1, description="Exposures per capture point")
     offset: int = Field(default=0, ge=0, description="Camera offset setting")
+    sequence_name: str = Field(
+        default="", description="Sequence subfolder name (empty = auto from datetime)"
+    )
 
     @field_validator("binning")
     @classmethod

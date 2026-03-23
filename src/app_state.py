@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from src.capture.controller import CaptureController
@@ -16,6 +17,35 @@ from src.models.project import (
 )
 from src.models.spline import sample_points_along_spline
 from src.models.undo import UndoStack
+
+
+def _resolve_output_dir(project: Project) -> Path:
+    """Build output directory: base_dir / sequence_name.
+
+    Uses the sequence name from capture settings, or auto-generates
+    one from the current datetime. Appends a counter if the directory
+    already exists.
+
+    Args:
+        project: The project containing capture settings.
+
+    Returns:
+        Path to the created output directory.
+    """
+    base = Path(settings.output_dir)
+    seq_name = project.capture_settings.sequence_name.strip()
+    if not seq_name:
+        seq_name = datetime.now().strftime("%Y-%m-%d_%H%M")
+
+    output = base / seq_name
+    if output.exists():
+        counter = 2
+        while (base / f"{seq_name}_{counter}").exists():
+            counter += 1
+        output = base / f"{seq_name}_{counter}"
+
+    output.mkdir(parents=True, exist_ok=True)
+    return output
 
 
 def _default_project() -> Project:
@@ -126,8 +156,7 @@ class AppState:
         if len(self.project.capture_points) < 2:
             msg = "Need at least 2 capture points"
             raise RuntimeError(msg)
-        output = Path(settings.output_dir)
-        output.mkdir(parents=True, exist_ok=True)
+        output = _resolve_output_dir(self.project)
         return CaptureController(
             project=self.project,
             indi_client=self.indi_client,
