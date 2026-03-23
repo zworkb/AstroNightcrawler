@@ -206,8 +206,8 @@ class BottomPanelComponent:
                 host = host_input.value or "localhost"
                 port = int(port_input.value or 7624)
                 try:
-                    from src.indi.real_client import RealINDIClient
-                    self.state.indi_client = RealINDIClient()
+                    from src.indi.async_adapter import AsyncINDIAdapter
+                    self.state.indi_client = AsyncINDIAdapter()
                     await self.state.indi_client.connect(host, port)
                     status_label.text = f"Connected to {host}:{port}"
                     status_label.classes(
