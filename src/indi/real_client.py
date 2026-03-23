@@ -349,6 +349,18 @@ class RealINDIClient(INDIClient):
         self._handler.setBLOBMode(
             PyIndi.B_ALSO, camera.getDeviceName(), None,
         )
+        # Set upload mode to CLIENT so BLOBs are sent to us
+        upload = camera.getSwitch("UPLOAD_MODE")
+        if upload:
+            for i in range(upload.count()):
+                name = upload[i].getName()
+                if name == "UPLOAD_CLIENT":
+                    upload[i].setState(PyIndi.ISS_ON)
+                else:
+                    upload[i].setState(PyIndi.ISS_OFF)
+            self._handler.sendNewSwitch(upload)
+            logger.info("Upload mode set to CLIENT")
+
         gain_prop = camera.getNumber("CCD_GAIN")
         if gain_prop:
             gain_prop[0].value = params.gain
