@@ -124,7 +124,7 @@ class ToolbarComponent:
         ekos_btn.tooltip("Export EKOS Sequence")
 
     def _render_view_toggles(self) -> None:
-        """Render view toggle buttons for constellations and atmosphere."""
+        """Render view toggle buttons for constellations, atmosphere, and DSOs."""
         ui.separator().props("vertical").classes("mx-1")
 
         # Constellation lines toggle (default: on)
@@ -151,6 +151,14 @@ class ToolbarComponent:
         ).props("flat dense").classes("text-blue")
         self._atmo_btn.tooltip("Toggle atmosphere")
 
+        # DSO toggle (default: on)
+        self._dso = True
+        self._dso_btn = ui.button(
+            icon="blur_on",
+            on_click=lambda: self._toggle_dso(),
+        ).props("flat dense").classes("text-blue")
+        self._dso_btn.tooltip("Toggle deep sky objects")
+
     def _toggle_const_lines(self) -> None:
         """Toggle constellation lines visibility on the starmap."""
         self._const_lines = not self._const_lines
@@ -176,6 +184,15 @@ class ToolbarComponent:
         ui.run_javascript(f"window.stelBridge?.setAtmosphere({val})")
         self._atmo_btn.classes(
             replace="text-blue" if self._atmo else "text-grey",
+        )
+
+    def _toggle_dso(self) -> None:
+        """Toggle deep sky objects visibility on the starmap."""
+        self._dso = not self._dso
+        val = "true" if self._dso else "false"
+        ui.run_javascript(f"window.stelBridge?.setDSOVisible({val})")
+        self._dso_btn.classes(
+            replace="text-blue" if self._dso else "text-grey",
         )
 
     def _render_action_tools(self) -> None:

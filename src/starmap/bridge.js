@@ -130,7 +130,38 @@ window.stelBridge = (() => {
         }
 
         canvas.addEventListener("click", (evt) => {
-            if (!drawModeActive) return;
+            if (!drawModeActive) {
+                // Pan mode: show selected object info (name, magnitude, type)
+                setTimeout(() => {
+                    if (!engine || !engine.core || !engine.core.selection) return;
+                    const sel = engine.core.selection;
+                    try {
+                        const name = sel.getInfo('name') || sel.getInfo('short_name') || 'Unknown';
+                        const vmag = sel.getInfo('vmag');
+                        const type = sel.getInfo('type') || '';
+
+                        let info = name;
+                        if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
+                            info += ` | mag ${vmag.toFixed(1)}`;
+                        }
+                        if (type) {
+                            info += ` (${type})`;
+                        }
+
+                        const overlay = ensureOverlay(el);
+                        if (overlay) {
+                            overlay.textContent = info;
+                            overlay.style.background = 'rgba(0,100,200,0.8)';
+                            setTimeout(() => {
+                                overlay.style.background = 'rgba(0,0,0,0.6)';
+                            }, 3000);
+                        }
+                    } catch(e) {
+                        // Selection might not support getInfo
+                    }
+                }, 200);
+                return;
+            }
             const rect = canvas.getBoundingClientRect();
             const x = Math.round(evt.clientX - rect.left);
             const y = Math.round(evt.clientY - rect.top);
@@ -336,6 +367,17 @@ window.stelBridge = (() => {
             if (!engine) return;
             engine.core.atmosphere.visible = visible;
             console.log("Atmosphere:", visible);
+        },
+
+        /**
+         * Toggle deep sky objects visibility and labels.
+         * @param {boolean} visible - True to show, false to hide.
+         */
+        setDSOVisible(visible) {
+            if (!engine) return;
+            engine.core.dsos.visible = visible;
+            engine.core.dsos.hints_visible = visible;
+            console.log("DSOs:", visible);
         },
 
         /**
