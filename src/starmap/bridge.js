@@ -129,8 +129,9 @@ window.stelBridge = (() => {
             return;
         }
 
-        // Show object info when selection changes (event-driven via engine.core.change)
-        engine.core.change("selection", () => {
+        // Show object info when any property changes — filter for selection
+        Module.change((obj, attr) => {
+            if (attr !== "selection") return;
             if (drawModeActive) return;
             const sel = engine.core.selection;
             if (!sel) return;
