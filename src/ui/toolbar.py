@@ -58,6 +58,7 @@ class ToolbarComponent:
             self._render_edit_tools()
             ui.separator().props("vertical")
             self._render_file_tools()
+            self._render_view_toggles()
             ui.space()
             self._render_action_tools()
 
@@ -121,6 +122,61 @@ class ToolbarComponent:
             on_click=self._on_ekos_export,
         ).props("flat dense")
         ekos_btn.tooltip("Export EKOS Sequence")
+
+    def _render_view_toggles(self) -> None:
+        """Render view toggle buttons for constellations and atmosphere."""
+        ui.separator().props("vertical").classes("mx-1")
+
+        # Constellation lines toggle (default: on)
+        self._const_lines = True
+        self._lines_btn = ui.button(
+            icon="auto_awesome",
+            on_click=lambda: self._toggle_const_lines(),
+        ).props("flat dense").classes("text-blue")
+        self._lines_btn.tooltip("Toggle constellation lines")
+
+        # Constellation labels toggle (default: on)
+        self._const_labels = True
+        self._labels_btn = ui.button(
+            icon="label",
+            on_click=lambda: self._toggle_const_labels(),
+        ).props("flat dense").classes("text-blue")
+        self._labels_btn.tooltip("Toggle constellation labels")
+
+        # Atmosphere toggle (default: on)
+        self._atmo = True
+        self._atmo_btn = ui.button(
+            icon="cloud",
+            on_click=lambda: self._toggle_atmosphere(),
+        ).props("flat dense").classes("text-blue")
+        self._atmo_btn.tooltip("Toggle atmosphere")
+
+    def _toggle_const_lines(self) -> None:
+        """Toggle constellation lines visibility on the starmap."""
+        self._const_lines = not self._const_lines
+        val = "true" if self._const_lines else "false"
+        ui.run_javascript(f"window.stelBridge?.setConstellationLines({val})")
+        self._lines_btn.classes(
+            replace="text-blue" if self._const_lines else "text-grey",
+        )
+
+    def _toggle_const_labels(self) -> None:
+        """Toggle constellation labels visibility on the starmap."""
+        self._const_labels = not self._const_labels
+        val = "true" if self._const_labels else "false"
+        ui.run_javascript(f"window.stelBridge?.setConstellationLabels({val})")
+        self._labels_btn.classes(
+            replace="text-blue" if self._const_labels else "text-grey",
+        )
+
+    def _toggle_atmosphere(self) -> None:
+        """Toggle atmosphere visibility on the starmap."""
+        self._atmo = not self._atmo
+        val = "true" if self._atmo else "false"
+        ui.run_javascript(f"window.stelBridge?.setAtmosphere({val})")
+        self._atmo_btn.classes(
+            replace="text-blue" if self._atmo else "text-grey",
+        )
 
     def _render_action_tools(self) -> None:
         """Render the start-capture button."""

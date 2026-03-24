@@ -309,6 +309,36 @@ window.stelBridge = (() => {
         },
 
         /**
+         * Toggle constellation lines visibility.
+         * @param {boolean} visible - True to show, false to hide.
+         */
+        setConstellationLines(visible) {
+            if (!engine) return;
+            engine.core.constellations.lines_visible = visible;
+            console.log("Constellation lines:", visible);
+        },
+
+        /**
+         * Toggle constellation labels visibility.
+         * @param {boolean} visible - True to show, false to hide.
+         */
+        setConstellationLabels(visible) {
+            if (!engine) return;
+            engine.core.constellations.labels_visible = visible;
+            console.log("Constellation labels:", visible);
+        },
+
+        /**
+         * Toggle atmosphere visibility.
+         * @param {boolean} visible - True to show, false to hide.
+         */
+        setAtmosphere(visible) {
+            if (!engine) return;
+            engine.core.atmosphere.visible = visible;
+            console.log("Atmosphere:", visible);
+        },
+
+        /**
          * Return the current field-of-view in degrees.
          * @returns {number}
          */
