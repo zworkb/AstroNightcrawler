@@ -131,18 +131,33 @@ window.stelBridge = (() => {
 
         canvas.addEventListener("click", (evt) => {
             if (!drawModeActive) {
-                // Pan mode: show selected object info (name, magnitude, type)
+                // Pan mode: show selected object info after engine processes click
                 setTimeout(() => {
-                    if (!engine || !engine.core || !engine.core.selection) return;
+                    if (!engine || !engine.core) return;
                     const sel = engine.core.selection;
+                    console.log("Selection object:", sel);
+                    if (!sel) {
+                        console.log("No selection");
+                        return;
+                    }
+                    // Try different API approaches
+                    console.log("Selection methods:", Object.getOwnPropertyNames(Object.getPrototypeOf(sel)));
                     try {
-                        const name = sel.getInfo('name') || sel.getInfo('short_name') || 'Unknown';
-                        const vmag = sel.getInfo('vmag');
-                        const type = sel.getInfo('type') || '';
+                        // Approach 1: getInfo with observer
+                        const obs = engine.observer;
+                        let name, vmag, type;
+                        try { name = sel.getInfo("name", obs); } catch(_) {}
+                        try { name = name || sel.getInfo("short_name", obs); } catch(_) {}
+                        try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
+                        try { type = sel.getInfo("type", obs); } catch(_) {}
+                        // Approach 2: direct properties
+                        if (!name) try { name = sel.name; } catch(_) {}
+                        if (!name) try { name = sel.designations; } catch(_) {}
+                        console.log("name:", name, "vmag:", vmag, "type:", type);
 
-                        let info = name;
+                        let info = name || "Unknown";
                         if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
-                            info += ` | mag ${vmag.toFixed(1)}`;
+                            info += ` | mag ${Number(vmag).toFixed(1)}`;
                         }
                         if (type) {
                             info += ` (${type})`;
@@ -151,15 +166,15 @@ window.stelBridge = (() => {
                         const overlay = ensureOverlay(el);
                         if (overlay) {
                             overlay.textContent = info;
-                            overlay.style.background = 'rgba(0,100,200,0.8)';
+                            overlay.style.background = "rgba(0,100,200,0.8)";
                             setTimeout(() => {
-                                overlay.style.background = 'rgba(0,0,0,0.6)';
+                                overlay.style.background = "rgba(0,0,0,0.6)";
                             }, 3000);
                         }
                     } catch(e) {
-                        // Selection might not support getInfo
+                        console.error("Selection info error:", e);
                     }
-                }, 200);
+                }, 500);
                 return;
             }
             const rect = canvas.getBoundingClientRect();
