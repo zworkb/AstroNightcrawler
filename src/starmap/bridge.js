@@ -161,8 +161,10 @@ window.stelBridge = (() => {
                 if (overlay) {
                     overlay.textContent = info;
                     overlay.style.background = "rgba(0,100,200,0.8)";
+                    _selectionShown = true;
                     setTimeout(() => {
                         overlay.style.background = "rgba(0,0,0,0.6)";
+                        _selectionShown = false;
                     }, 3000);
                 }
             } catch(_) {}
@@ -192,7 +194,10 @@ window.stelBridge = (() => {
             }
         });
 
+        let _selectionShown = false;
+
         canvas.addEventListener("mousemove", (evt) => {
+            if (_selectionShown) return;
             const rect = canvas.getBoundingClientRect();
             const x = Math.round(evt.clientX - rect.left);
             const y = Math.round(evt.clientY - rect.top);
