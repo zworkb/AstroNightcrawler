@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from nicegui import ui
+from nicegui import app, ui
 
 from src.ui.overlay_sync import refresh_overlay
 
@@ -79,6 +79,7 @@ class BottomPanelComponent:
         self.state.update_capture_points()
         self.refresh()
         refresh_overlay(self.state)
+        app.storage.user["project"] = self.state.project.model_dump_json()
 
     def _render_sequence_name(self) -> None:
         """Render sequence name input with auto-generated placeholder."""
