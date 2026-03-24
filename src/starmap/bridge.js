@@ -145,9 +145,10 @@ window.stelBridge = (() => {
                 console.log("Selection changed:", sel.v);
                 const obs = engine.observer;
                 let name = "";
-                try { name = sel.designations(); } catch(_) {}
+                try { name = sel.designations(); } catch(e) { console.log("designations error:", e); }
                 let vmag;
-                try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
+                try { vmag = sel.getInfo("vmag", obs); } catch(e) { console.log("vmag error:", e); }
+                console.log("name:", JSON.stringify(name), "vmag:", vmag);
                 if (!name && (vmag === undefined || vmag === null)) return;
                 let info = name || "Unknown";
                 if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
