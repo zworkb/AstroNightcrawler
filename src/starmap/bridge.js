@@ -129,12 +129,10 @@ window.stelBridge = (() => {
             return;
         }
 
-        // Show object info when Stellarium reports a click
-        // Return 0 so the engine processes the selection, then read it after a delay
-        Module.on("click", () => {
-            if (drawModeActive) return 0;
+        // Show object info on mouseup in pan mode (after Stellarium processes the click)
+        canvas.addEventListener("mouseup", () => {
+            if (drawModeActive || !engine || !engine.core) return;
             setTimeout(() => {
-                if (!engine || !engine.core) return;
                 const sel = engine.core.selection;
                 if (!sel) return;
                 const obs = engine.observer;
@@ -158,8 +156,7 @@ window.stelBridge = (() => {
                         overlay.style.background = "rgba(0,0,0,0.6)";
                     }, 3000);
                 }
-            }, 300);
-            return 0;
+            }, 500);
         });
 
         canvas.addEventListener("click", (evt) => {
