@@ -1,7 +1,8 @@
 NC_HOST ?= 0.0.0.0
 NC_PORT ?= 8090
+SKYDATA_URL ?= https://stellarium-web.org/skydata
 
-.PHONY: run-capturing skydata
+.PHONY: run-capturing skydata skydata-extra skydata-dso skydata-stars-deep
 run-capturing: $(INSTALL_TARGETS) .env skydata
 	NC_HOST=$(NC_HOST) NC_PORT=$(NC_PORT) python -c "from src.main import main; main()"
 
@@ -14,3 +15,36 @@ skydata:
 		echo "skydata is empty, downloading..."; \
 		bash scripts/download_skydata.sh; \
 	fi
+
+## Download extended DSO catalogue (Norder 1-3, ~2 MB)
+skydata-dso:
+	@echo "Downloading extended DSO catalogues..."
+	@for norder in 1 2 3; do \
+		npix=$$(python3 -c "print(12 * 4**$$norder)"); \
+		mkdir -p skydata/dso/Norder$$norder/Dir0; \
+		for i in $$(seq 0 $$((npix - 1))); do \
+			f="skydata/dso/Norder$$norder/Dir0/Npix$$i.eph"; \
+			[ -f "$$f" ] || curl -sfL "$(SKYDATA_URL)/dso/Norder$$norder/Dir0/Npix$$i.eph" -o "$$f" 2>/dev/null || true; \
+		done; \
+		echo "  DSO Norder$$norder: $$npix tiles"; \
+	done
+	@echo "DSO catalogues updated."
+
+## Download deeper star catalogues (Norder 2-3, ~20 MB)
+skydata-stars-deep:
+	@echo "Downloading deep star catalogues..."
+	@for norder in 2 3; do \
+		npix=$$(python3 -c "print(12 * 4**$$norder)"); \
+		mkdir -p skydata/stars/Norder$$norder/Dir0; \
+		for i in $$(seq 0 $$((npix - 1))); do \
+			f="skydata/stars/Norder$$norder/Dir0/Npix$$i.eph"; \
+			[ -f "$$f" ] || curl -sfL "$(SKYDATA_URL)/stars/Norder$$norder/Dir0/Npix$$i.eph" -o "$$f" 2>/dev/null || true; \
+		done; \
+		echo "  Stars Norder$$norder: $$npix tiles"; \
+	done
+	@echo "Star catalogues updated."
+
+## Download all extended catalogues (DSO + deep stars)
+skydata-extra: skydata-dso skydata-stars-deep
+	@du -sh skydata/
+	@echo "All extended catalogues downloaded."
