@@ -145,7 +145,10 @@ window.stelBridge = (() => {
                 console.log("Selection changed:", sel.v);
                 const obs = engine.observer;
                 let name = "";
-                try { name = sel.designations(); } catch(e) { console.log("designations error:", e); }
+                try {
+                    const desig = sel.designations();
+                    name = Array.isArray(desig) ? desig[0] || "" : desig || "";
+                } catch(_) {}
                 let vmag;
                 try { vmag = sel.getInfo("vmag", obs); } catch(e) { console.log("vmag error:", e); }
                 console.log("name:", JSON.stringify(name), "vmag:", vmag);
