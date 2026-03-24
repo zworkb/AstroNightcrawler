@@ -130,7 +130,7 @@ class ToolbarComponent:
         # Constellation lines toggle (default: on)
         self._const_lines = True
         self._lines_btn = ui.button(
-            icon="auto_awesome",
+            icon="polyline",
             on_click=lambda: self._toggle_const_lines(),
         ).props("flat dense").classes("text-blue")
         self._lines_btn.tooltip("Toggle constellation lines")
