@@ -129,17 +129,21 @@ window.stelBridge = (() => {
             return;
         }
 
-        // Show object info when Stellarium reports a click (event-based, no polling)
+        // Show object info when Stellarium reports a click
+        // Return 0 so the engine processes the selection, then read it after a delay
         Module.on("click", () => {
-            if (drawModeActive || !engine || !engine.core) return 0;
-            const sel = engine.core.selection;
-            if (!sel) return 0;
-            try {
+            if (drawModeActive) return 0;
+            setTimeout(() => {
+                if (!engine || !engine.core) return;
+                const sel = engine.core.selection;
+                if (!sel) return;
                 const obs = engine.observer;
                 let name = "";
                 try { name = sel.designations(); } catch(_) {}
                 let vmag;
                 try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
+
+                if (!name && (vmag === undefined || vmag === null)) return;
 
                 let info = name || "Unknown";
                 if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
@@ -154,7 +158,7 @@ window.stelBridge = (() => {
                         overlay.style.background = "rgba(0,0,0,0.6)";
                     }, 3000);
                 }
-            } catch(_) {}
+            }, 300);
             return 0;
         });
 
