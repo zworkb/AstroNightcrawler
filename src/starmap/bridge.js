@@ -136,13 +136,11 @@ window.stelBridge = (() => {
             try {
                 const sel = engine.core.selection;
                 if (!sel || !sel.v) {
-                    if (_lastSelV !== 0) console.log("Selection cleared");
                     _lastSelV = 0;
                     return;
                 }
                 if (sel.v === _lastSelV) return;
                 _lastSelV = sel.v;
-                console.log("Selection changed:", sel.v);
                 const obs = engine.observer;
                 let name = "";
                 try {
@@ -151,7 +149,6 @@ window.stelBridge = (() => {
                 } catch(_) {}
                 let vmag;
                 try { vmag = sel.getInfo("vmag", obs); } catch(e) { console.log("vmag error:", e); }
-                console.log("name:", JSON.stringify(name), "vmag:", vmag);
                 if (!name && (vmag === undefined || vmag === null)) return;
                 let info = name || "Unknown";
                 if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
@@ -368,7 +365,6 @@ window.stelBridge = (() => {
         setConstellationLabels(visible) {
             if (!engine) return;
             engine.core.constellations.labels_visible = visible;
-            console.log("Constellation labels:", visible);
         },
 
         /**
@@ -378,7 +374,6 @@ window.stelBridge = (() => {
         setAtmosphere(visible) {
             if (!engine) return;
             engine.core.atmosphere.visible = visible;
-            console.log("Atmosphere:", visible);
         },
 
         /**
@@ -389,7 +384,6 @@ window.stelBridge = (() => {
             if (!engine) return;
             engine.core.dsos.visible = visible;
             engine.core.dsos.hints_visible = visible;
-            console.log("DSOs:", visible);
         },
 
         /**
