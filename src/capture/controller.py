@@ -183,6 +183,7 @@ class CaptureController:
             await self._capture_exposures(point)
             point.status = "captured"
             point.captured_at = datetime.now(UTC).isoformat()
+            self._save_manifest()
             logger.info("Point %d captured OK", point.index)
         except TimeoutError as exc:
             logger.error("Point %d timed out: %s", point.index, exc)

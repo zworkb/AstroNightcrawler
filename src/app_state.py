@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -19,12 +20,48 @@ from src.models.spline import sample_points_along_spline
 from src.models.undo import UndoStack
 
 
+def _restore_from_manifest(project: Project, manifest_path: Path) -> None:
+    """Restore capture point statuses from an existing manifest.
+
+    Points that were captured in the previous session are marked as
+    "captured" so the controller skips them.
+    """
+    data = json.loads(manifest_path.read_text())
+    saved_points = data.get("capture_points", [])
+
+    # Build a lookup: index -> status
+    status_map: dict[int, tuple[str, list[str], str | None]] = {}
+    for sp in saved_points:
+        idx = sp.get("index")
+        status = sp.get("status", "pending")
+        files = sp.get("files", [])
+        captured_at = sp.get("captured_at")
+        if idx is not None:
+            status_map[idx] = (status, files, captured_at)
+
+    # Apply to current project's capture points
+    for point in project.capture_points:
+        if point.index in status_map:
+            status, files, captured_at = status_map[point.index]
+            if status == "captured":
+                point.status = "captured"
+                point.files = files
+                point.captured_at = captured_at
+
+    captured = sum(1 for p in project.capture_points if p.status == "captured")
+    logging.getLogger("capture").info(
+        "Resumed from manifest: %d/%d points already captured",
+        captured, len(project.capture_points),
+    )
+
+
 def _resolve_output_dir(project: Project) -> Path:
     """Build output directory: base_dir / sequence_name.
 
     Uses the sequence name from capture settings, or auto-generates
-    one from the current datetime. Appends a counter if the directory
-    already exists.
+    one from the current datetime. If the directory already contains a
+    manifest.json, resumes from the previous capture session. Otherwise,
+    appends a counter if the directory already exists.
 
     Args:
         project: The project containing capture settings.
@@ -38,7 +75,15 @@ def _resolve_output_dir(project: Project) -> Path:
         seq_name = datetime.now().strftime("%Y-%m-%d_%H%M")
 
     output = base / seq_name
+
+    manifest_path = output / "manifest.json"
+    if manifest_path.exists():
+        # Resume: load manifest and restore point statuses
+        _restore_from_manifest(project, manifest_path)
+        return output
+
     if output.exists():
+        # Directory exists but no manifest — append counter
         counter = 2
         while (base / f"{seq_name}_{counter}").exists():
             counter += 1
@@ -156,11 +201,13 @@ class AppState:
         if len(self.project.capture_points) < 2:
             msg = "Need at least 2 capture points"
             raise RuntimeError(msg)
-        # Reset point status so a new run captures all points
+        # Don't reset points that were already captured (from manifest resume)
+        # Only reset non-captured points to ensure clean state
         for pt in self.project.capture_points:
-            pt.status = "pending"
-            pt.files = []
-            pt.captured_at = None
+            if pt.status != "captured":
+                pt.status = "pending"
+                pt.files = []
+                pt.captured_at = None
         output = _resolve_output_dir(self.project)
         return CaptureController(
             project=self.project,
