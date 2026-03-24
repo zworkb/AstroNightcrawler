@@ -129,14 +129,11 @@ window.stelBridge = (() => {
             return;
         }
 
-        // Poll for selection changes to show object info
-        let lastSelectionId = null;
-        setInterval(() => {
-            if (drawModeActive || !engine || !engine.core) return;
+        // Show object info when Stellarium reports a click (event-based, no polling)
+        Module.on("click", () => {
+            if (drawModeActive || !engine || !engine.core) return 0;
             const sel = engine.core.selection;
-            if (!sel || !sel.v) return;
-            if (sel.v === lastSelectionId) return;
-            lastSelectionId = sel.v;
+            if (!sel) return 0;
             try {
                 const obs = engine.observer;
                 let name = "";
@@ -158,7 +155,8 @@ window.stelBridge = (() => {
                     }, 3000);
                 }
             } catch(_) {}
-        }, 300);
+            return 0;
+        });
 
         canvas.addEventListener("click", (evt) => {
             if (!drawModeActive) return;
