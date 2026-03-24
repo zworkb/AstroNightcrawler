@@ -129,13 +129,11 @@ window.stelBridge = (() => {
             return;
         }
 
-        // Show object info when selection changes (poll-based, ~0 CPU when idle)
-        let lastSelV = 0;
-        setInterval(() => {
-            if (drawModeActive || !engine || !engine.core) return;
+        // Show object info when selection changes (event-driven via engine.core.change)
+        engine.core.change("selection", () => {
+            if (drawModeActive) return;
             const sel = engine.core.selection;
-            if (!sel || !sel.v || sel.v === lastSelV) return;
-            lastSelV = sel.v;
+            if (!sel) return;
             const obs = engine.observer;
             let name = "";
             try { name = sel.designations(); } catch(_) {}
@@ -154,7 +152,7 @@ window.stelBridge = (() => {
                     overlay.style.background = "rgba(0,0,0,0.6)";
                 }, 3000);
             }
-        }, 500);
+        });
 
         canvas.addEventListener("click", (evt) => {
             if (!drawModeActive) return;
