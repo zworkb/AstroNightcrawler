@@ -91,6 +91,7 @@ def create_layout() -> None:
             "path_remove_point", "path_split",
             "path_add_point_on_segment",
             "path_handle_moved",
+            "object_selected",
         ]
         listeners = "\n".join(
             f"el.addEventListener('{evt}',"
@@ -215,6 +216,10 @@ def _register_path_events(
     ))
     ui.on("camera_state_update", lambda e: _on_camera_update(
         state, _extract_detail(e), panel,
+    ))
+    ui.on("object_selected", lambda e: ui.notify(
+        _extract_detail(e).get("name", ""),
+        type="info", timeout=3000,
     ))
 
 

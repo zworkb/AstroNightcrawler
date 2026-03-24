@@ -157,15 +157,9 @@ window.stelBridge = (() => {
                 if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
                     info += ` | mag ${Number(vmag).toFixed(1)}`;
                 }
-                const overlay = ensureOverlay(el);
-                if (overlay) {
-                    overlay.textContent = info;
-                    overlay.style.background = "rgba(0,100,200,0.8)";
-                    _selectionShown = true;
-                    setTimeout(() => {
-                        overlay.style.background = "rgba(0,0,0,0.6)";
-                        _selectionShown = false;
-                    }, 3000);
+                // Show as toast notification via NiceGUI
+                if (window.emitEvent) {
+                    window.emitEvent("object_selected", {name: info});
                 }
             } catch(_) {}
         }, 1000);
