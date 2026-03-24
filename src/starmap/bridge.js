@@ -129,31 +129,34 @@ window.stelBridge = (() => {
             return;
         }
 
-        // Show object info when selection changes (via engine's reactive system)
-        engine.onValueChanged((path, value) => {
-            if (path !== "core.selection") return;
+        // Check for object selection once per second
+        let _lastSelV = 0;
+        setInterval(() => {
             if (drawModeActive) return;
-            const sel = engine.core.selection;
-            if (!sel) return;
-            const obs = engine.observer;
-            let name = "";
-            try { name = sel.designations(); } catch(_) {}
-            let vmag;
-            try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
-            if (!name && (vmag === undefined || vmag === null)) return;
-            let info = name || "Unknown";
-            if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
-                info += ` | mag ${Number(vmag).toFixed(1)}`;
-            }
-            const overlay = ensureOverlay(el);
-            if (overlay) {
-                overlay.textContent = info;
-                overlay.style.background = "rgba(0,100,200,0.8)";
-                setTimeout(() => {
-                    overlay.style.background = "rgba(0,0,0,0.6)";
-                }, 3000);
-            }
-        });
+            try {
+                const sel = engine.core.selection;
+                if (!sel || !sel.v || sel.v === _lastSelV) return;
+                _lastSelV = sel.v;
+                const obs = engine.observer;
+                let name = "";
+                try { name = sel.designations(); } catch(_) {}
+                let vmag;
+                try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
+                if (!name && (vmag === undefined || vmag === null)) return;
+                let info = name || "Unknown";
+                if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
+                    info += ` | mag ${Number(vmag).toFixed(1)}`;
+                }
+                const overlay = ensureOverlay(el);
+                if (overlay) {
+                    overlay.textContent = info;
+                    overlay.style.background = "rgba(0,100,200,0.8)";
+                    setTimeout(() => {
+                        overlay.style.background = "rgba(0,0,0,0.6)";
+                    }, 3000);
+                }
+            } catch(_) {}
+        }, 1000);
 
         canvas.addEventListener("click", (evt) => {
             if (!drawModeActive) return;
