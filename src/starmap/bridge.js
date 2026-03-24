@@ -129,39 +129,39 @@ window.stelBridge = (() => {
             return;
         }
 
+        // Poll for selection changes to show object info
+        let lastSelectionId = null;
+        setInterval(() => {
+            if (drawModeActive || !engine || !engine.core) return;
+            const sel = engine.core.selection;
+            if (!sel || !sel.v) return;
+            if (sel.v === lastSelectionId) return;
+            lastSelectionId = sel.v;
+            try {
+                const obs = engine.observer;
+                let name = "";
+                try { name = sel.designations(); } catch(_) {}
+                let vmag;
+                try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
+
+                let info = name || "Unknown";
+                if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
+                    info += ` | mag ${Number(vmag).toFixed(1)}`;
+                }
+
+                const overlay = ensureOverlay(el);
+                if (overlay) {
+                    overlay.textContent = info;
+                    overlay.style.background = "rgba(0,100,200,0.8)";
+                    setTimeout(() => {
+                        overlay.style.background = "rgba(0,0,0,0.6)";
+                    }, 3000);
+                }
+            } catch(_) {}
+        }, 300);
+
         canvas.addEventListener("click", (evt) => {
-            if (!drawModeActive) {
-                // Pan mode: show selected object info
-                setTimeout(() => {
-                    if (!engine || !engine.core) return;
-                    const sel = engine.core.selection;
-                    if (!sel) return;
-                    try {
-                        const obs = engine.observer;
-                        // designations() returns the object name(s)
-                        let name = "";
-                        try { name = sel.designations(); } catch(_) {}
-                        // vmag works via getInfo
-                        let vmag;
-                        try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
-
-                        let info = name || "Unknown";
-                        if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
-                            info += ` | mag ${Number(vmag).toFixed(1)}`;
-                        }
-
-                        const overlay = ensureOverlay(el);
-                        if (overlay) {
-                            overlay.textContent = info;
-                            overlay.style.background = "rgba(0,100,200,0.8)";
-                            setTimeout(() => {
-                                overlay.style.background = "rgba(0,0,0,0.6)";
-                            }, 3000);
-                        }
-                    } catch(_) {}
-                }, 500);
-                return;
-            }
+            if (!drawModeActive) return;
             const rect = canvas.getBoundingClientRect();
             const x = Math.round(evt.clientX - rect.left);
             const y = Math.round(evt.clientY - rect.top);
