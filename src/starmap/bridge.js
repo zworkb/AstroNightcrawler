@@ -131,36 +131,23 @@ window.stelBridge = (() => {
 
         canvas.addEventListener("click", (evt) => {
             if (!drawModeActive) {
-                // Pan mode: show selected object info after engine processes click
+                // Pan mode: show selected object info
                 setTimeout(() => {
                     if (!engine || !engine.core) return;
                     const sel = engine.core.selection;
-                    console.log("Selection object:", sel);
-                    if (!sel) {
-                        console.log("No selection");
-                        return;
-                    }
-                    // Try different API approaches
-                    console.log("Selection methods:", Object.getOwnPropertyNames(Object.getPrototypeOf(sel)));
+                    if (!sel) return;
                     try {
-                        // Approach 1: getInfo with observer
                         const obs = engine.observer;
-                        let name, vmag, type;
-                        try { name = sel.getInfo("name", obs); } catch(_) {}
-                        try { name = name || sel.getInfo("short_name", obs); } catch(_) {}
+                        // designations() returns the object name(s)
+                        let name = "";
+                        try { name = sel.designations(); } catch(_) {}
+                        // vmag works via getInfo
+                        let vmag;
                         try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
-                        try { type = sel.getInfo("type", obs); } catch(_) {}
-                        // Approach 2: direct properties
-                        if (!name) try { name = sel.name; } catch(_) {}
-                        if (!name) try { name = sel.designations; } catch(_) {}
-                        console.log("name:", name, "vmag:", vmag, "type:", type);
 
                         let info = name || "Unknown";
                         if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
                             info += ` | mag ${Number(vmag).toFixed(1)}`;
-                        }
-                        if (type) {
-                            info += ` (${type})`;
                         }
 
                         const overlay = ensureOverlay(el);
@@ -171,9 +158,7 @@ window.stelBridge = (() => {
                                 overlay.style.background = "rgba(0,0,0,0.6)";
                             }, 3000);
                         }
-                    } catch(e) {
-                        console.error("Selection info error:", e);
-                    }
+                    } catch(_) {}
                 }, 500);
                 return;
             }
