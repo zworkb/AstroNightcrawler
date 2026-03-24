@@ -114,6 +114,7 @@ window.pathOverlayBridge = (() => {
      * @param {number} alt - Altitude in degrees (same frame as camera pitch).
      * @returns {{x: number, y: number}|null}
      */
+    const _LOG_DEBUG = false;
     let _logCounter = 0;
 
     /**
@@ -178,7 +179,7 @@ window.pathOverlayBridge = (() => {
         const sx = cam.canvas_width / 2 + projX * scale;
         const sy = cam.canvas_height / 2 - projY * scale;
 
-        if (_logCounter++ < 20) {
+        if (_LOG_DEBUG && _logCounter++ < 20) {
             console.log(`toScreen(az=${az.toFixed(2)}, alt=${alt.toFixed(2)})` +
                 ` cam(yaw=${cam.yaw.toFixed(2)}, pitch=${cam.pitch.toFixed(2)},` +
                 ` fov=${cam.fov.toFixed(2)}, ${cam.canvas_width}x${cam.canvas_height})` +
@@ -238,7 +239,7 @@ window.pathOverlayBridge = (() => {
             ra: ((az / D) % 360 + 360) % 360,
             dec: alt / D,
         };
-        console.log(`toWorld(${x}, ${y}) cam(yaw=${cam.yaw.toFixed(2)},` +
+        if (_LOG_DEBUG) console.log(`toWorld(${x}, ${y}) cam(yaw=${cam.yaw.toFixed(2)},` +
             ` pitch=${cam.pitch.toFixed(2)}) → az=${result.ra.toFixed(2)}, alt=${result.dec.toFixed(2)}`);
         return result;
     }
