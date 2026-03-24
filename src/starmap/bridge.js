@@ -129,36 +129,32 @@ window.stelBridge = (() => {
             return;
         }
 
-        // Show object info on mouseup in pan mode
-        // Use container + capture phase since Stellarium WASM consumes canvas events
-        el.addEventListener("mouseup", () => {
+        // Show object info when selection changes (poll-based, ~0 CPU when idle)
+        let lastSelV = 0;
+        setInterval(() => {
             if (drawModeActive || !engine || !engine.core) return;
-            setTimeout(() => {
-                const sel = engine.core.selection;
-                if (!sel) return;
-                const obs = engine.observer;
-                let name = "";
-                try { name = sel.designations(); } catch(_) {}
-                let vmag;
-                try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
-
-                if (!name && (vmag === undefined || vmag === null)) return;
-
-                let info = name || "Unknown";
-                if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
-                    info += ` | mag ${Number(vmag).toFixed(1)}`;
-                }
-
-                const overlay = ensureOverlay(el);
-                if (overlay) {
-                    overlay.textContent = info;
-                    overlay.style.background = "rgba(0,100,200,0.8)";
-                    setTimeout(() => {
-                        overlay.style.background = "rgba(0,0,0,0.6)";
-                    }, 3000);
-                }
-            }, 500);
-        });
+            const sel = engine.core.selection;
+            if (!sel || !sel.v || sel.v === lastSelV) return;
+            lastSelV = sel.v;
+            const obs = engine.observer;
+            let name = "";
+            try { name = sel.designations(); } catch(_) {}
+            let vmag;
+            try { vmag = sel.getInfo("vmag", obs); } catch(_) {}
+            if (!name && (vmag === undefined || vmag === null)) return;
+            let info = name || "Unknown";
+            if (vmag !== undefined && vmag !== null && !isNaN(vmag)) {
+                info += ` | mag ${Number(vmag).toFixed(1)}`;
+            }
+            const overlay = ensureOverlay(el);
+            if (overlay) {
+                overlay.textContent = info;
+                overlay.style.background = "rgba(0,100,200,0.8)";
+                setTimeout(() => {
+                    overlay.style.background = "rgba(0,0,0,0.6)";
+                }, 3000);
+            }
+        }, 500);
 
         canvas.addEventListener("click", (evt) => {
             if (!drawModeActive) return;
