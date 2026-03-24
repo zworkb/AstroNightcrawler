@@ -129,8 +129,9 @@ window.stelBridge = (() => {
             return;
         }
 
-        // Show object info on mouseup in pan mode (after Stellarium processes the click)
-        canvas.addEventListener("mouseup", () => {
+        // Show object info on mouseup in pan mode
+        // Use container + capture phase since Stellarium WASM consumes canvas events
+        el.addEventListener("mouseup", () => {
             if (drawModeActive || !engine || !engine.core) return;
             setTimeout(() => {
                 const sel = engine.core.selection;
