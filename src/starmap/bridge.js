@@ -291,6 +291,9 @@ window.stelBridge = (() => {
                 try { engine.core.milkyway.addDataSource({ url: base + "/surveys/milkyway" }); } catch(_) {}
             }
 
+            // Show all constellations, not just the pointed one
+            engine.core.constellations.show_only_pointed = false;
+
             attachMouseEvents(container);
             console.log("Stellarium Web Engine initialized.");
         },
@@ -346,7 +349,7 @@ window.stelBridge = (() => {
         setConstellationLines(visible) {
             if (!engine) return;
             engine.core.constellations.lines_visible = visible;
-            console.log("Constellation lines:", visible);
+            engine.core.constellations.show_only_pointed = false;
         },
 
         /**
