@@ -129,9 +129,9 @@ window.stelBridge = (() => {
             return;
         }
 
-        // Show object info when any property changes — filter for selection
-        Module.change((obj, attr) => {
-            if (attr !== "selection") return;
+        // Show object info when selection changes (via engine's reactive system)
+        engine.onValueChanged((path, value) => {
+            if (path !== "core.selection") return;
             if (drawModeActive) return;
             const sel = engine.core.selection;
             if (!sel) return;
