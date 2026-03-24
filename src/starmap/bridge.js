@@ -291,8 +291,10 @@ window.stelBridge = (() => {
                 try { engine.core.milkyway.addDataSource({ url: base + "/surveys/milkyway" }); } catch(_) {}
             }
 
-            // Show all constellations, not just the pointed one
+            // Enable constellations and labels by default
             engine.core.constellations.show_only_pointed = false;
+            engine.core.constellations.lines_visible = true;
+            engine.core.constellations.labels_visible = true;
 
             attachMouseEvents(container);
             console.log("Stellarium Web Engine initialized.");
