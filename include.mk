@@ -48,3 +48,29 @@ skydata-stars-deep:
 skydata-extra: skydata-dso skydata-stars-deep
 	@du -sh skydata/
 	@echo "All extended catalogues downloaded."
+
+## Download large catalogues — full Gaia/DSO (Norder 4-6, ~180 MB, thousands of tiles)
+skydata-full: skydata-extra
+	@echo "Downloading full star catalogues (this may take a while)..."
+	@for norder in 4 5 6; do \
+		npix=$$(python3 -c "print(12 * 4**$$norder)"); \
+		echo "  Stars Norder$$norder: $$npix tiles..."; \
+		for i in $$(seq 0 $$((npix - 1))); do \
+			dir="skydata/stars/Norder$$norder/Dir$$(( i / 10000 * 10000 ))"; \
+			mkdir -p "$$dir"; \
+			f="$$dir/Npix$$i.eph"; \
+			[ -f "$$f" ] || curl -sfL "$(SKYDATA_URL)/stars/Norder$$norder/Dir$$(( i / 10000 * 10000 ))/Npix$$i.eph" -o "$$f" 2>/dev/null || true; \
+		done; \
+	done
+	@for norder in 4 5; do \
+		npix=$$(python3 -c "print(12 * 4**$$norder)"); \
+		echo "  DSO Norder$$norder: $$npix tiles..."; \
+		for i in $$(seq 0 $$((npix - 1))); do \
+			dir="skydata/dso/Norder$$norder/Dir$$(( i / 10000 * 10000 ))"; \
+			mkdir -p "$$dir"; \
+			f="$$dir/Npix$$i.eph"; \
+			[ -f "$$f" ] || curl -sfL "$(SKYDATA_URL)/dso/Norder$$norder/Dir$$(( i / 10000 * 10000 ))/Npix$$i.eph" -o "$$f" 2>/dev/null || true; \
+		done; \
+	done
+	@du -sh skydata/
+	@echo "Full catalogues downloaded."
