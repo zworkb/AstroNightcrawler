@@ -135,8 +135,14 @@ window.stelBridge = (() => {
             if (drawModeActive) return;
             try {
                 const sel = engine.core.selection;
-                if (!sel || !sel.v || sel.v === _lastSelV) return;
+                if (!sel || !sel.v) {
+                    if (_lastSelV !== 0) console.log("Selection cleared");
+                    _lastSelV = 0;
+                    return;
+                }
+                if (sel.v === _lastSelV) return;
                 _lastSelV = sel.v;
+                console.log("Selection changed:", sel.v);
                 const obs = engine.observer;
                 let name = "";
                 try { name = sel.designations(); } catch(_) {}
