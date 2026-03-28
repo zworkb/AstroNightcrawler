@@ -75,6 +75,96 @@ def _tangent_vector(
     return (dx / length, dy / length)
 
 
+def compute_handles(
+    control_points: list[ControlPoint],
+) -> list[ControlPoint]:
+    """Compute smooth Bézier handles for control points lacking them.
+
+    Uses Catmull-Rom tangents: the tangent at each interior point is the
+    direction from the previous to the next point, scaled to one-third of
+    the adjacent segment length.  Only fills in handles that are currently
+    ``None``; manually-adjusted handles are preserved.
+
+    Args:
+        control_points: Ordered list of control points (ra/dec set).
+
+    Returns:
+        The same list with auto-computed handles filled in.
+    """
+    n = len(control_points)
+    if n < 2:
+        return control_points
+
+    for i, cp in enumerate(control_points):
+        pt = (cp.ra, cp.dec)
+        if i == 0:
+            _compute_first_handle(cp, pt, control_points[1])
+        elif i == n - 1:
+            _compute_last_handle(cp, pt, control_points[-2])
+        else:
+            _compute_middle_handles(
+                cp, pt, control_points[i - 1], control_points[i + 1],
+            )
+
+    return control_points
+
+
+def _compute_first_handle(
+    cp: ControlPoint,
+    pt: tuple[float, float],
+    nxt: ControlPoint,
+) -> None:
+    """Set handle_out for the first point if not manually set."""
+    if cp.handle_out is not None:
+        return
+    tang = _tangent_vector(pt, (nxt.ra, nxt.dec))
+    seg_len = math.hypot(nxt.ra - pt[0], nxt.dec - pt[1])
+    scale = seg_len / 3.0
+    cp.handle_out = Coordinate(
+        ra=_wrap_ra(pt[0] + tang[0] * scale),
+        dec=pt[1] + tang[1] * scale,
+    )
+
+
+def _compute_last_handle(
+    cp: ControlPoint,
+    pt: tuple[float, float],
+    prev: ControlPoint,
+) -> None:
+    """Set handle_in for the last point if not manually set."""
+    if cp.handle_in is not None:
+        return
+    tang = _tangent_vector((prev.ra, prev.dec), pt)
+    seg_len = math.hypot(pt[0] - prev.ra, pt[1] - prev.dec)
+    scale = seg_len / 3.0
+    cp.handle_in = Coordinate(
+        ra=_wrap_ra(pt[0] - tang[0] * scale),
+        dec=pt[1] - tang[1] * scale,
+    )
+
+
+def _compute_middle_handles(
+    cp: ControlPoint,
+    pt: tuple[float, float],
+    prev: ControlPoint,
+    nxt: ControlPoint,
+) -> None:
+    """Set handle_in/out for an interior point if not manually set."""
+    tang = _tangent_vector((prev.ra, prev.dec), (nxt.ra, nxt.dec))
+    if cp.handle_in is None:
+        seg_in = math.hypot(pt[0] - prev.ra, pt[1] - prev.dec)
+        cp.handle_in = Coordinate(
+            ra=_wrap_ra(pt[0] - tang[0] * seg_in / 3.0),
+            dec=pt[1] - tang[1] * seg_in / 3.0,
+        )
+    if cp.handle_out is None:
+        seg_out = math.hypot(nxt.ra - pt[0], nxt.dec - pt[1])
+        cp.handle_out = Coordinate(
+            ra=_wrap_ra(pt[0] + tang[0] * seg_out / 3.0),
+            dec=pt[1] + tang[1] * seg_out / 3.0,
+        )
+
+
 def fit_bezier_to_points(
     points: list[tuple[float, float]],
 ) -> list[ControlPoint]:

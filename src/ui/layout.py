@@ -8,7 +8,7 @@ from typing import Any
 from nicegui import app, ui
 
 from src.app_state import AppState
-from src.models.freehand import fit_bezier_to_points, rdp_simplify
+from src.models.freehand import compute_handles, fit_bezier_to_points, rdp_simplify
 from src.models.project import ControlPoint, Coordinate, SplinePath
 from src.starmap.engine import StarMap
 from src.starmap.projection import azalt_to_radec
@@ -267,6 +267,9 @@ def _on_map_click_sync(
     before = state.project.path.model_dump_json()
     cp = ControlPoint(ra=ra, dec=dec)
     state.project.path.control_points.append(cp)
+    state.project.path.control_points = compute_handles(
+        state.project.path.control_points,
+    )
     after = state.project.path.model_dump_json()
     state.undo_stack.push(before, after)
     state.update_capture_points()
@@ -298,6 +301,11 @@ def _on_point_moved_sync(
         before = state.project.path.model_dump_json()
         cps[idx].ra = ra
         cps[idx].dec = dec
+        # Clear auto-computed handles on the moved point so they get
+        # recomputed; manually-set handles on *other* points are preserved.
+        cps[idx].handle_in = None
+        cps[idx].handle_out = None
+        state.project.path.control_points = compute_handles(cps)
         after = state.project.path.model_dump_json()
         state.undo_stack.push(before, after)
         state.update_capture_points()
@@ -358,6 +366,7 @@ def _on_remove_point_sync(
     before = state.project.path.model_dump_json()
     if 0 <= idx < len(cps):
         cps.pop(idx)
+    state.project.path.control_points = compute_handles(cps)
     after = state.project.path.model_dump_json()
     state.undo_stack.push(before, after)
     state.update_capture_points()
