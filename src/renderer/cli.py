@@ -25,7 +25,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         prog="nightcrawler-render",
         description="Render captured FITS sequences to video.",
     )
-    p.add_argument("--input", "-i", required=True, type=Path, help="Capture directory")
+    p.add_argument("--input", "-i", type=Path, default=None, help="Capture directory")
     p.add_argument("--output", "-o", type=Path, default=Path("output.mp4"), help="Output video")
     p.add_argument("--fps", type=int, default=settings.render_fps)
     p.add_argument("--crf", type=int, default=settings.render_crf)
@@ -105,6 +105,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.ui:
         _start_ui()
         return
+
+    if not args.input:
+        print("Error: --input is required (or use --ui for web interface)")  # noqa: T201
+        raise SystemExit(1)
 
     config = _build_config(args)
     pipeline = RenderPipeline(args.input, config)
