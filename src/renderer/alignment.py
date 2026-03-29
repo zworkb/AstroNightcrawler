@@ -74,24 +74,22 @@ def align_pair(
 def filter_outlier_alignments(
     results: list[AlignmentResult],
 ) -> list[AlignmentResult]:
-    """Fix failed alignments and replace outliers.
+    """Fix failed alignments by replacing with median of successful ones.
 
-    1. Failed alignments (success=False, dx=dy=0) are replaced by
-       interpolation from successful neighbors, or by the median
-       of successful results if no neighbors are available.
-    2. Then outliers (>2σ from median of successful results) are
-       replaced with the median.
+    Only failed alignments (success=False) are replaced.
+    Successful alignments are kept as-is, even if they differ
+    significantly from the median — this supports non-linear paths
+    where dx/dy intentionally varies.
 
     Args:
         results: Alignment results for each adjacent pair.
 
     Returns:
-        New list with failures interpolated and outliers replaced.
+        New list with failures replaced by median.
     """
     if len(results) < 2:
         return list(results)
 
-    # Step 1: compute median from SUCCESSFUL results only
     good = [r for r in results if r.success]
     if not good:
         logger.warning("No successful alignments — cannot filter")
@@ -101,12 +99,15 @@ def filter_outlier_alignments(
     good_dys = np.array([r.dy for r in good])
     med_dx = float(np.median(good_dxs))
     med_dy = float(np.median(good_dys))
+    n_failed = sum(1 for r in results if not r.success)
     logger.info(
-        "Alignment stats: %d/%d successful, median dx=%.1f dy=%.1f",
-        len(good), len(results), med_dx, med_dy,
+        "Alignment stats: %d/%d successful, %d failed, median dx=%.1f dy=%.1f",
+        len(good), len(results), n_failed, med_dx, med_dy,
     )
 
-    # Step 2: replace failed alignments with median of successful
+    if n_failed == 0:
+        return list(results)
+
     fixed: list[AlignmentResult] = []
     for i, r in enumerate(results):
         if not r.success:
@@ -120,29 +121,7 @@ def filter_outlier_alignments(
         else:
             fixed.append(r)
 
-    # Step 3: filter outliers among the now-complete set
-    std_dx = float(np.std([r.dx for r in fixed]))
-    std_dy = float(np.std([r.dy for r in fixed]))
-
-    filtered: list[AlignmentResult] = []
-    for i, r in enumerate(fixed):
-        is_outlier = False
-        if std_dx > 0 and abs(r.dx - med_dx) > 2 * std_dx:
-            is_outlier = True
-        if std_dy > 0 and abs(r.dy - med_dy) > 2 * std_dy:
-            is_outlier = True
-        if is_outlier:
-            logger.warning(
-                "Outlier at pair %d: dx=%.1f dy=%.1f → median",
-                i, r.dx, r.dy,
-            )
-            filtered.append(AlignmentResult(
-                dx=med_dx, dy=med_dy, rotation=r.rotation, success=True,
-            ))
-        else:
-            filtered.append(r)
-
-    return filtered
+    return fixed
 
 
 def compute_crop_margins(
