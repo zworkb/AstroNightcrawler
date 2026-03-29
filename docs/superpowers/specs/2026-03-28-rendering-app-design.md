@@ -69,6 +69,16 @@ Read `manifest.json` from the capture output directory. Extract:
 - Only include points with `status == "captured"`
 - Resolve FITS file paths relative to the manifest directory
 
+**Multiple exposures per point:** When `exposures_per_point > 1`, each point has multiple FITS files. Strategy:
+- **v1:** Use the first exposure only (`files[0]`)
+- **v2:** Stack all exposures per point (mean/median) before rendering — produces one combined frame per point with improved SNR
+
+**Memory management:** FITS files can be large (35MB raw, ~190MB as float64 numpy array after debayering). Strategy:
+- Process frames in pairs — never load more than 2-3 full-resolution frames simultaneously
+- Use `astropy.io.fits` with `memmap=True` for lazy loading
+- Write intermediate results (debayered, stretched) to disk as 16-bit TIFF or `.npy` files
+- Filmstrip thumbnails generated at reduced resolution and cached as JPEG
+
 #### 2.2 Debayer
 
 DSLR cameras with Bayer sensors produce raw CFA (Color Filter Array) data. Mono cameras produce grayscale.
@@ -78,9 +88,9 @@ DSLR cameras with Bayer sensors produce raw CFA (Color Filter Array) data. Mono 
 - If present → apply debayering (demosaicing)
 - If absent → treat as mono (or already debayered color)
 
-**Algorithm:** Bilinear interpolation as default (fast), with option for VNG or AHD (higher quality, slower).
+**Algorithm:** Bilinear interpolation as default (fast), with option for VNG or AHD (higher quality, slower). Uses `colour-demosaicing` library (pure Python/numpy, lightweight).
 
-**Manual override:** User can force debayer on/off and select the Bayer pattern, in case the FITS header is missing or incorrect.
+**Manual override:** User can force debayer on/off and select the Bayer pattern, in case the FITS header is missing or incorrect. CLI flag: `--debayer auto|off|RGGB|GBRG|GRBG|BGGR`.
 
 #### 2.3 Stretch / Tonmapping
 
@@ -102,6 +112,8 @@ FITS data is linear (photon counts). Must be stretched to visible range for disp
 - Live preview on current frame
 
 **Global vs per-frame:** Settings are global by default (same stretch for all frames). Per-frame override possible but not required for v1.
+
+**Output color space:** Stretched images are converted to **8-bit sRGB** for video output (H.264 default profile is 8-bit). Mono images are replicated to 3-channel grayscale. 10-bit output is a future enhancement.
 
 #### 2.4 Review — Frame Browser
 
@@ -164,11 +176,12 @@ For each adjacent pair (n, n+1):
   crop_margin_x = max(crop_margin_x, abs(shift.dx))
   crop_margin_y = max(crop_margin_y, abs(shift.dy))
 
-crop_width = original_width - crop_margin_x
-crop_height = original_height - crop_margin_y
+# Factor 2: margin needed on BOTH sides since shifts can go either direction
+crop_width = original_width - 2 * crop_margin_x
+crop_height = original_height - 2 * crop_margin_y
 ```
 
-During interpolation between frame n and n+1, the crop window position shifts linearly from `(0, 0)` to `(shift.dx, shift.dy)` over the intermediate frames. This ensures no undefined (black) edges appear at any point during the transition.
+The crop window is anchored at `(crop_margin_x, crop_margin_y)` and shifts linearly to `(crop_margin_x + shift.dx, crop_margin_y + shift.dy)` over the intermediate frames. The `2×` factor ensures no black edges appear regardless of shift direction.
 
 #### 2.7 Video Encoding
 
@@ -184,9 +197,12 @@ Uses ffmpeg via subprocess.
 | Resolution | native | From FITS, or downscale factor |
 
 **Process:**
-1. Write stretched/transitioned frames as numbered PNGs to a temp directory
-2. Call ffmpeg: `ffmpeg -framerate 24 -i frame_%06d.png -c:v libx264 -crf 18 output.mp4`
-3. Clean up temp PNGs (or keep with `--keep-frames`)
+1. Check ffmpeg availability at pipeline start (fail early with clear error)
+2. Estimate disk space needed (frame count × frame size) and warn if insufficient
+3. Write stretched/transitioned frames as numbered 8-bit sRGB PNGs to a temp directory (`tempfile.mkdtemp()`, or custom path via `--temp-dir`)
+4. Call ffmpeg: `ffmpeg -framerate 24 -i frame_%06d.png -c:v libx264 -crf 18 output.mp4`
+5. Clean up temp PNGs (or keep with `--keep-frames` for debugging)
+6. On failure: capture ffmpeg stderr, surface meaningful error message, clean up temp directory
 
 ---
 
@@ -208,12 +224,23 @@ nightcrawler-render \
   --crossfade-frames 6 \
   --crf 18
 
-# Linear pan with alignment
+# Linear pan (alignment is implied, no separate --align flag needed)
 nightcrawler-render \
   --input ./output/deneb/ \
   --output deneb.mp4 \
-  --transition linear-pan \
-  --align
+  --transition linear-pan
+
+# Override debayer detection
+nightcrawler-render \
+  --input ./output/deneb/ \
+  --output deneb.mp4 \
+  --debayer RGGB
+
+# Keep intermediate frames for debugging
+nightcrawler-render \
+  --input ./output/deneb/ \
+  --output deneb.mp4 \
+  --keep-frames --temp-dir ./render-temp/
 ```
 
 ### 3.2 Web UI (NiceGUI)
@@ -253,7 +280,7 @@ Accessible via:
 |-----------|-----------|
 | FITS reading | astropy.io.fits |
 | Stretch/tonemap | astropy.visualization (ZScaleInterval, AsinhStretch) |
-| Debayering | colour-demosaicing or OpenCV |
+| Debayering | colour-demosaicing |
 | Star alignment | astroalign 2.6.2 |
 | Image processing | numpy, scipy.ndimage (sub-pixel shifts) |
 | Video encoding | ffmpeg (subprocess) |
@@ -264,7 +291,7 @@ Accessible via:
 
 ```toml
 "astroalign>=2.6",
-"colour-demosaicing>=0.2",  # or opencv-python
+"colour-demosaicing>=0.2",
 "Pillow>=10.0",             # PNG writing
 ```
 
@@ -280,6 +307,8 @@ Additional settings in `.env`:
 | `NC_RENDER_CRF` | `18` | Default video quality |
 | `NC_RENDER_TRANSITION` | `crossfade` | Default transition type |
 | `NC_RENDER_CROSSFADE_FRAMES` | `6` | Frames per crossfade transition |
+
+**Precedence:** CLI flags override `.env` variables, which override built-in defaults.
 
 ---
 
