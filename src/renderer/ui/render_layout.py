@@ -151,18 +151,41 @@ class _RenderState:
 
 
 async def _load(state: _RenderState) -> None:
-    """Load a capture directory.
+    """Load a capture directory asynchronously.
 
     Args:
         state: Mutable render UI state.
     """
+    import asyncio
+
     capture_dir = Path(state.input_dir)
     config = RenderConfig(stretch_mode=state.stretch_mode)
     state.pipeline = RenderPipeline(capture_dir, config)
-    state.pipeline.load()
-    ui.notify(f"Loaded {len(state.pipeline.frames)} frames")
-    _update_filmstrip(state)
+
+    _set_render_status(state, "Loading manifest...", 0.1)
+    await asyncio.to_thread(state.pipeline.load)
+
+    n = len(state.pipeline.frames)
+    ui.notify(f"Loaded {n} frames — generating thumbnails...")
+    _set_render_status(state, f"Thumbnails 0/{n}...", 0.2)
+
+    # Build filmstrip incrementally to avoid blocking
+    if state.filmstrip:
+        state.filmstrip.clear()
+
+    for i in range(n):
+        thumb = await asyncio.to_thread(_make_thumbnail, state, i)
+        if thumb and state.filmstrip:
+            with state.filmstrip:
+                _render_thumb_card(state, i, state.pipeline.frames[i].index, thumb)
+        if state.progress:
+            state.progress.value = 0.2 + 0.7 * (i + 1) / n
+        if state.status_label:
+            state.status_label.text = f"Thumbnails {i + 1}/{n}..."
+
+    _set_render_status(state, "", 0)
     _show_preview(state, 0)
+    ui.notify(f"Ready — {n} frames loaded")
 
 
 def _update_filmstrip(state: _RenderState) -> None:
@@ -216,11 +239,26 @@ def _make_thumbnail(state: _RenderState, frame_idx: int) -> str | None:
     if not state.pipeline:
         return None
     try:
-        stretched = state.pipeline.stretch_frame(frame_idx)
-        img = Image.fromarray(stretched)
-        img.thumbnail((128, 128))
+        import numpy as np
+
+        from src.renderer.importer import load_frame
+
+        frame = state.pipeline.frames[frame_idx]
+        data = load_frame(frame)
+        # Quick downscale before expensive processing
+        step = max(1, min(data.shape[0], data.shape[1]) // 64)
+        small = data[::step, ::step]
+        # Simple auto-stretch on the small version
+        fdata = small.astype(np.float32)
+        vmin, vmax = np.percentile(fdata, [1, 99])
+        normed = np.clip((fdata - vmin) / (vmax - vmin + 1), 0, 1)
+        rgb = (normed * 255).astype(np.uint8)
+        if rgb.ndim == 2:
+            rgb = np.stack([rgb, rgb, rgb], axis=2)
+        img = Image.fromarray(rgb)
+        img.thumbnail((64, 64))
         buf = io.BytesIO()
-        img.save(buf, format="JPEG")
+        img.save(buf, format="JPEG", quality=60)
         b64 = base64.b64encode(buf.getvalue()).decode()
         return f"data:image/jpeg;base64,{b64}"
     except Exception:
@@ -261,11 +299,13 @@ async def _render(state: _RenderState) -> None:
 
     config = _build_render_config(state)
     state.pipeline.config = config
+    import asyncio
+
     _set_render_status(state, "Rendering...", 0.5)
 
     try:
         output = Path(state.output_path)
-        state.pipeline.render(output)
+        await asyncio.to_thread(state.pipeline.render, output)
         ui.notify(f"Video saved: {output}", type="positive")
     except Exception as exc:
         ui.notify(f"Render failed: {exc}", type="negative")

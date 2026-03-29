@@ -41,3 +41,6 @@ htmlcov/
 # mxmake build artifacts
 .mxmake/
 requirements-mxdev.txt
+
+# Rendered videos
+*.mp4
