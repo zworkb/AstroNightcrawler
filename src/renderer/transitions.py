@@ -25,7 +25,8 @@ def crossfade(
     """
     frames: list[np.ndarray] = []
     for i in range(num_frames):
-        alpha = (i + 1) / (num_frames + 1)
+        # alpha goes from 0.0 (=frame_a) to 1.0 (=frame_b), inclusive
+        alpha = i / max(num_frames - 1, 1)
         blended = (
             (1 - alpha) * frame_a.astype(np.float32)
             + alpha * frame_b.astype(np.float32)

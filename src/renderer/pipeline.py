@@ -240,6 +240,7 @@ class RenderPipeline:
         logger.info("Stage: stream debayer + stretch + transitions (%d frames)", len(active))
         gen_t0 = time.monotonic()
 
+        has_transitions = self.config.transition in ("linear-pan", "crossfade")
         is_pan = self.config.transition == "linear-pan" and margins != (0, 0)
         mx, my = margins
 
@@ -268,8 +269,8 @@ class RenderPipeline:
                 crop_w = w - 2 * mx if mx else w
                 dims_logged = True
 
-            # Write key frame (for non-pan modes)
-            if not is_pan:
+            # Write key frame only if no transitions (transitions include start/end)
+            if not has_transitions:
                 write_frame_png(current_stretched, temp, frame_counter)
                 frame_counter += 1
                 if on_progress:
@@ -291,12 +292,15 @@ class RenderPipeline:
 
             prev_stretched = current_stretched
 
-        # For linear-pan: write last key frame (cropped at margin)
-        if is_pan and prev_stretched is not None:
-            h, w = prev_stretched.shape[:2]
-            crop_h = h - 2 * my if my else h
-            crop_w = w - 2 * mx if mx else w
-            last = prev_stretched[my:my + crop_h, mx:mx + crop_w]
+        # Write last key frame (transitions don't include the final frame)
+        if has_transitions and prev_stretched is not None:
+            if is_pan:
+                h, w = prev_stretched.shape[:2]
+                crop_h = h - 2 * my if my else h
+                crop_w = w - 2 * mx if mx else w
+                last = prev_stretched[my:my + crop_h, mx:mx + crop_w]
+            else:
+                last = prev_stretched
             write_frame_png(last, temp, frame_counter)
             frame_counter += 1
 
