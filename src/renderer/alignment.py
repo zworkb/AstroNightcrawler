@@ -51,6 +51,53 @@ def align_pair(
         return AlignmentResult(success=False)
 
 
+def filter_outlier_alignments(
+    results: list[AlignmentResult],
+) -> list[AlignmentResult]:
+    """Replace outlier alignment results with median values.
+
+    Any result whose dx or dy deviates more than 2 standard deviations
+    from the median is replaced with the median offset.
+
+    Args:
+        results: Alignment results for each adjacent pair.
+
+    Returns:
+        New list with outliers replaced by median values.
+    """
+    if len(results) < 3:
+        return list(results)
+
+    dxs = np.array([r.dx for r in results])
+    dys = np.array([r.dy for r in results])
+
+    med_dx = float(np.median(dxs))
+    med_dy = float(np.median(dys))
+    std_dx = float(np.std(dxs))
+    std_dy = float(np.std(dys))
+
+    filtered: list[AlignmentResult] = []
+    for i, r in enumerate(results):
+        is_outlier = False
+        if std_dx > 0 and abs(r.dx - med_dx) > 2 * std_dx:
+            is_outlier = True
+        if std_dy > 0 and abs(r.dy - med_dy) > 2 * std_dy:
+            is_outlier = True
+        if is_outlier:
+            logger.warning(
+                "Alignment outlier at pair %d: dx=%.1f dy=%.1f "
+                "(median dx=%.1f dy=%.1f) — replaced with median",
+                i, r.dx, r.dy, med_dx, med_dy,
+            )
+            filtered.append(AlignmentResult(
+                dx=med_dx, dy=med_dy, rotation=r.rotation, success=r.success,
+            ))
+        else:
+            filtered.append(r)
+
+    return filtered
+
+
 def compute_crop_margins(
     results: list[AlignmentResult],
 ) -> tuple[int, int]:

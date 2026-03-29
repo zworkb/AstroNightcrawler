@@ -40,7 +40,7 @@ ui.run_with(
 def main() -> None:
     """Start the application server."""
     logging.basicConfig(
-        level=logging.INFO,
+        level=getattr(logging, settings.log_level),
         format="%(name)s %(levelname)s: %(message)s",
     )
     import uvicorn

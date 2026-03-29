@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import logging
+import math
 import shutil
 import tempfile
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
-from src.renderer.alignment import AlignmentResult, align_pair, compute_crop_margins
+from src.renderer.alignment import (
+    AlignmentResult,
+    align_pair,
+    filter_outlier_alignments,
+)
 from src.renderer.debayer import DebayerMode, debayer_frame, detect_bayer
 from src.renderer.importer import FrameInfo, load_frame, load_manifest
 from src.renderer.stretch import StretchParams, apply_stretch
@@ -77,20 +84,38 @@ class RenderPipeline:
         """
         frame = self.frames[frame_idx]
         data = load_frame(frame)
+        logger.debug("Raw frame %d shape=%s dtype=%s", frame_idx, data.shape, data.dtype)
+
         pattern = detect_bayer(frame.bayer_pattern, self.config.debayer_mode)
         debayered = debayer_frame(data, pattern)
-        return apply_stretch(
+        logger.debug(
+            "Debayered frame %d: %dx%d (%d channels)",
+            frame_idx, debayered.shape[1], debayered.shape[0],
+            debayered.shape[2] if debayered.ndim == 3 else 1,
+        )
+
+        stretched = apply_stretch(
             debayered,
             mode=self.config.stretch_mode,
             params=self.config.stretch_params,
             mono_to_rgb=True,
         )
+        logger.debug(
+            "Stretched frame %d: min=%d max=%d",
+            frame_idx, int(stretched.min()), int(stretched.max()),
+        )
+        return stretched
 
-    def render(self, output_path: Path) -> None:
+    def render(
+        self,
+        output_path: Path,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
         """Run the full pipeline and produce a video file.
 
         Args:
             output_path: Path for the output video file.
+            on_progress: Optional callback ``(current_frame, total_frames)``.
         """
         if not check_ffmpeg():
             msg = "ffmpeg not found"
@@ -101,58 +126,136 @@ class RenderPipeline:
             msg = "Need at least 2 frames to render"
             raise RuntimeError(msg)
 
+        logger.info(
+            "Render started: %d active frames, transition=%s, fps=%d, crf=%d",
+            len(active), self.config.transition, self.config.fps, self.config.crf,
+        )
+        render_t0 = time.monotonic()
+
         temp = self._get_temp_dir()
         try:
-            self._render_to_dir(active, temp)
+            self._render_to_dir(active, temp, on_progress=on_progress)
+
+            logger.info("Encoding video to %s", output_path)
+            encode_t0 = time.monotonic()
             encode_video(temp, output_path, self.config.fps, self.config.crf)
+            encode_elapsed = time.monotonic() - encode_t0
+            file_size = output_path.stat().st_size if output_path.exists() else 0
+            logger.info(
+                "Encoding complete in %.1fs, file size %.2f MB",
+                encode_elapsed, file_size / (1024 * 1024),
+            )
         finally:
             if not self.config.keep_frames:
                 shutil.rmtree(temp, ignore_errors=True)
 
-    def _render_to_dir(self, active: list[FrameInfo], temp: Path) -> None:
+        total_elapsed = time.monotonic() - render_t0
+        logger.info("Render finished in %.1fs", total_elapsed)
+
+    def _render_to_dir(
+        self,
+        active: list[FrameInfo],
+        temp: Path,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> None:
         """Process all frames and write PNGs to temp directory."""
         frame_counter = 0
+        # key frames + transition frames between each pair
+        total_estimated = len(active) + (len(active) - 1) * self.config.crossfade_frames
 
         # Stretch all active frames
+        logger.info("Stage: debayer + stretch (%d frames)", len(active))
+        stretch_t0 = time.monotonic()
         stretched: list[np.ndarray] = []
         for i, frame in enumerate(active):
             idx = self.frames.index(frame)
             logger.info("Processing frame %d/%d", i + 1, len(active))
+            t0 = time.monotonic()
             stretched.append(self.stretch_frame(idx))
+            elapsed = time.monotonic() - t0
+            logger.debug("Frame %d/%d processed in %.2fs", i + 1, len(active), elapsed)
+        logger.info("Debayer + stretch complete in %.1fs", time.monotonic() - stretch_t0)
 
         # Align if needed for linear pan
+        cum_offsets: list[tuple[float, float]] = [(0.0, 0.0)]
         margins = (0, 0)
         if self.config.transition == "linear-pan" and len(stretched) > 1:
+            logger.info("Stage: alignment (%d pairs)", len(stretched) - 1)
+            align_t0 = time.monotonic()
             self._alignments = []
             for i in range(len(stretched) - 1):
                 mono_a = _to_mono(stretched[i])
                 mono_b = _to_mono(stretched[i + 1])
-                self._alignments.append(align_pair(mono_a, mono_b))
-            margins = compute_crop_margins(self._alignments)
+                result = align_pair(mono_a, mono_b)
+                logger.debug(
+                    "Alignment pair %d-%d: dx=%.2f dy=%.2f confidence=%.3f",
+                    i, i + 1, result.dx, result.dy, result.confidence,
+                )
+                self._alignments.append(result)
+            self._alignments = filter_outlier_alignments(self._alignments)
+            logger.info(
+                "Alignment complete in %.1fs (%d pairs kept after outlier filter)",
+                time.monotonic() - align_t0, len(self._alignments),
+            )
+
+            # Compute cumulative offsets
+            for a in self._alignments:
+                prev = cum_offsets[-1]
+                cum_offsets.append((prev[0] + a.dx, prev[1] + a.dy))
+
+            # Normalize so all offsets are non-negative
+            min_x = min(o[0] for o in cum_offsets)
+            min_y = min(o[1] for o in cum_offsets)
+            cum_offsets = [(o[0] - min_x, o[1] - min_y) for o in cum_offsets]
+
+            # Margins from the max cumulative offset
+            max_x = max(o[0] for o in cum_offsets)
+            max_y = max(o[1] for o in cum_offsets)
+            margins = (math.ceil(max_x), math.ceil(max_y))
 
         # Generate output frames with transitions
+        logger.info("Stage: generate output frames with transitions")
+        gen_t0 = time.monotonic()
+        h, w = stretched[0].shape[:2]
+        crop_h = h - 2 * margins[1] if margins[1] else h
+        crop_w = w - 2 * margins[0] if margins[0] else w
+
         for i in range(len(stretched)):
-            frame_img = stretched[i]
             if margins != (0, 0):
-                mx, my = margins
-                frame_img = frame_img[my:frame_img.shape[0] - my, mx:frame_img.shape[1] - mx]
+                ox = int(cum_offsets[i][0])
+                oy = int(cum_offsets[i][1])
+                frame_img = stretched[i][oy:oy + crop_h, ox:ox + crop_w]
+            else:
+                frame_img = stretched[i]
             write_frame_png(frame_img, temp, frame_counter)
             frame_counter += 1
+            if on_progress:
+                on_progress(frame_counter, total_estimated)
 
             # Add transition frames between this and next
             if i < len(stretched) - 1:
-                trans = self._make_transition(stretched, i, margins)
+                trans = self._make_transition(stretched, i, margins, cum_offsets)
+                logger.debug(
+                    "Transition %d->%d: %d frames generated",
+                    i, i + 1, len(trans),
+                )
                 for tf in trans:
                     write_frame_png(tf, temp, frame_counter)
                     frame_counter += 1
+                    if on_progress:
+                        on_progress(frame_counter, total_estimated)
 
-        logger.info("Wrote %d total frames to %s", frame_counter, temp)
+        gen_elapsed = time.monotonic() - gen_t0
+        logger.info(
+            "Wrote %d total frames to %s in %.1fs", frame_counter, temp, gen_elapsed,
+        )
 
     def _make_transition(
         self,
         stretched: list[np.ndarray],
         i: int,
         margins: tuple[int, int],
+        cum_offsets: list[tuple[float, float]],
     ) -> list[np.ndarray]:
         """Generate transition frames between stretched[i] and stretched[i+1]."""
         if self.config.transition == "crossfade":
@@ -163,6 +266,8 @@ class RenderPipeline:
                 self._alignments[i],
                 self.config.crossfade_frames,
                 margins[0], margins[1],
+                start_x=cum_offsets[i][0],
+                start_y=cum_offsets[i][1],
             )
         return []
 

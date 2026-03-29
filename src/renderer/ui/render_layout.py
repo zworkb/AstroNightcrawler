@@ -127,6 +127,22 @@ def _build_output_settings(state: _RenderState) -> None:
             label="Output", value="output.mp4",
         ).bind_value(state, "output_path")
 
+        def _browse_output() -> None:
+            from src.ui.folder_browser import FolderBrowserDialog
+
+            def _on_select(path: Path) -> None:
+                current_name = Path(state.output_path).name or "output.mp4"
+                state.output_path = str(path / current_name)
+
+            start = Path(state.output_path).parent
+            if not start.exists():
+                start = Path.cwd()
+            FolderBrowserDialog(on_select=_on_select).open(start)
+
+        ui.button(
+            "Browse", icon="folder_open", on_click=_browse_output,
+        ).props("dense")
+
 
 class _RenderState:
     """Mutable state for the render UI."""
@@ -301,16 +317,46 @@ async def _render(state: _RenderState) -> None:
     state.pipeline.config = config
     import asyncio
 
-    _set_render_status(state, "Rendering...", 0.5)
+    progress_state: dict[str, int] = {"current": 0, "total": 1}
+
+    def on_progress(current: int, total: int) -> None:
+        progress_state["current"] = current
+        progress_state["total"] = total
+
+    _set_render_status(state, "Rendering...", 0.0)
+    timer = ui.timer(
+        0.5,
+        lambda: _update_render_progress(state, progress_state),
+    )
 
     try:
         output = Path(state.output_path)
-        await asyncio.to_thread(state.pipeline.render, output)
+        await asyncio.to_thread(state.pipeline.render, output, on_progress)
         ui.notify(f"Video saved: {output}", type="positive")
     except Exception as exc:
         ui.notify(f"Render failed: {exc}", type="negative")
     finally:
+        timer.cancel()
         _set_render_status(state, "", 0)
+
+
+def _update_render_progress(
+    state: _RenderState,
+    progress_state: dict[str, int],
+) -> None:
+    """Read shared progress state and update the UI.
+
+    Args:
+        state: Mutable render UI state.
+        progress_state: Dict with 'current' and 'total' keys updated by
+            the render thread.
+    """
+    total = progress_state["total"]
+    current = progress_state["current"]
+    if total > 0 and state.progress:
+        state.progress.value = current / total
+    if state.status_label:
+        state.status_label.text = f"Rendering frame {current}/{total}..."
 
 
 def _build_render_config(state: _RenderState) -> RenderConfig:

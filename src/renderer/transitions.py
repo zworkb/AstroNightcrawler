@@ -41,6 +41,8 @@ def linear_pan(
     num_frames: int = 6,
     margin_x: int = 0,
     margin_y: int = 0,
+    start_x: float | None = None,
+    start_y: float | None = None,
 ) -> list[np.ndarray]:
     """Generate linear pan transition with sub-pixel shifting.
 
@@ -52,8 +54,12 @@ def linear_pan(
         frame_b: Ending frame (8-bit RGB).
         alignment: Offset between the two frames.
         num_frames: Number of intermediate frames.
-        margin_x: Horizontal crop margin in pixels.
-        margin_y: Vertical crop margin in pixels.
+        margin_x: Horizontal crop margin in pixels (defines crop size).
+        margin_y: Vertical crop margin in pixels (defines crop size).
+        start_x: Horizontal starting offset of the crop window within
+            frame_a. Defaults to margin_x when None.
+        start_y: Vertical starting offset of the crop window within
+            frame_a. Defaults to margin_y when None.
 
     Returns:
         List of cropped, shifted frames.
@@ -61,29 +67,41 @@ def linear_pan(
     h, w = frame_a.shape[:2]
     crop_h = h - 2 * margin_y
     crop_w = w - 2 * margin_x
+    base_x = float(margin_x) if start_x is None else start_x
+    base_y = float(margin_y) if start_y is None else start_y
     frames: list[np.ndarray] = []
 
     for i in range(num_frames):
         t = (i + 1) / (num_frames + 1)
 
-        # Interpolate crop window position
-        ox = margin_x + t * alignment.dx
-        oy = margin_y + t * alignment.dy
+        # Interpolated crop position
+        pos_x = base_x + t * alignment.dx
+        pos_y = base_y + t * alignment.dy
 
-        # Blend the two frames
+        # Integer and fractional parts
+        ix = int(pos_x)
+        iy = int(pos_y)
+        fx = pos_x - ix
+        fy = pos_y - iy
+
+        # Blend the two frames for smooth brightness transition
         blended = (
             (1 - t) * frame_a.astype(np.float32)
             + t * frame_b.astype(np.float32)
         )
 
-        # Sub-pixel shift
-        shift_vec = [oy - margin_y, ox - margin_x]
-        if blended.ndim == 3:
-            shift_vec.append(0)
-        shifted = ndimage_shift(blended, shift_vec, order=1)
+        # Crop at the integer position
+        cy = iy
+        cx = ix
+        cropped = blended[cy:cy + crop_h, cx:cx + crop_w]
 
-        # Crop to safe area
-        cropped = shifted[margin_y:margin_y + crop_h, margin_x:margin_x + crop_w]
+        # Sub-pixel shift for the fractional part only
+        if abs(fx) > 0.01 or abs(fy) > 0.01:
+            shift_vec = [fy, fx]
+            if cropped.ndim == 3:
+                shift_vec.append(0)
+            cropped = ndimage_shift(cropped, shift_vec, order=1)
+
         frames.append(cropped.astype(np.uint8))
 
     return frames

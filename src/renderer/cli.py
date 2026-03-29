@@ -51,6 +51,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--keep-frames", action="store_true", help="Keep intermediate PNGs")
     p.add_argument("--temp-dir", type=Path, default=None, help="Custom temp directory")
     p.add_argument("--ui", action="store_true", help="Start web UI instead of CLI render")
+    p.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default=settings.log_level,
+    )
     return p.parse_args(argv)
 
 
@@ -97,10 +102,11 @@ def main(argv: list[str] | None = None) -> None:
     Args:
         argv: Argument list (defaults to sys.argv).
     """
-    logging.basicConfig(
-        level=logging.INFO, format="%(name)s %(levelname)s: %(message)s",
-    )
     args = parse_args(argv)
+    logging.basicConfig(
+        level=getattr(logging, args.log_level),
+        format="%(name)s %(levelname)s: %(message)s",
+    )
 
     if args.ui:
         _start_ui()

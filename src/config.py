@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     render_crf: int = 18
     render_transition: str = "crossfade"
     render_crossfade_frames: int = 6
+    log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
     model_config = {"env_prefix": "NC_", "env_file": ".env"}
 
