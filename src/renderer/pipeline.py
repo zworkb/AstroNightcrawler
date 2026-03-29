@@ -358,6 +358,12 @@ def _resize_frame(frame: np.ndarray, target_w: int, target_h: int) -> np.ndarray
 
     img = Image.fromarray(frame)
     img.thumbnail((target_w, target_h), Image.LANCZOS)
+    # H.264 requires even dimensions
+    w, h = img.size
+    if w % 2 or h % 2:
+        w = w - w % 2
+        h = h - h % 2
+        img = img.crop((0, 0, w, h))
     return np.array(img)
 
 

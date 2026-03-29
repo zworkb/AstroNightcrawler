@@ -68,8 +68,11 @@ def linear_pan(
 
     _log = logging.getLogger(__name__)
     h, w = frame_a.shape[:2]
-    crop_h = max(1, h - 2 * margin_y)
-    crop_w = max(1, w - 2 * margin_x)
+    crop_h = max(2, h - 2 * margin_y)
+    crop_w = max(2, w - 2 * margin_x)
+    # H.264 requires even dimensions
+    crop_h -= crop_h % 2
+    crop_w -= crop_w % 2
     base_x = float(margin_x) if start_x is None else start_x
     base_y = float(margin_y) if start_y is None else start_y
     frames: list[np.ndarray] = []
