@@ -1,5 +1,6 @@
 """Tests for the rendering pipeline orchestration."""
 
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -69,3 +70,14 @@ class TestRenderPipeline:
         pipeline.skip_frame(2)
         active = pipeline.active_frames()
         assert len(active) == 4
+
+    @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="ffmpeg not installed")
+    def test_render_produces_video(self, capture_dir: Path, tmp_path: Path) -> None:
+        """Full pipeline: load -> stretch -> encode -> video file."""
+        config = RenderConfig(fps=10, crf=28, transition="crossfade", crossfade_frames=2)
+        pipeline = RenderPipeline(capture_dir, config)
+        pipeline.load()
+        output = tmp_path / "test_output.mp4"
+        pipeline.render(output)
+        assert output.exists()
+        assert output.stat().st_size > 100

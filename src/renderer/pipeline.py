@@ -173,25 +173,17 @@ class RenderPipeline:
         # key frames + transition frames between each pair
         total_estimated = len(active) + (len(active) - 1) * self.config.crossfade_frames
 
-        # Stretch all active frames
-        logger.info("Stage: debayer + stretch (%d frames)", len(active))
-        stretch_t0 = time.monotonic()
-        stretched: list[np.ndarray] = []
-        for i, frame in enumerate(active):
-            idx = self.frames.index(frame)
-            logger.info("Processing frame %d/%d", i + 1, len(active))
-            t0 = time.monotonic()
-            stretched.append(self.stretch_frame(idx))
-            elapsed = time.monotonic() - t0
-            logger.debug("Frame %d/%d processed in %.2fs", i + 1, len(active), elapsed)
-        logger.info("Debayer + stretch complete in %.1fs", time.monotonic() - stretch_t0)
+        # Probe first frame to determine dimensions for resize scale
+        first_idx = self.frames.index(active[0])
+        probe = self.stretch_frame(first_idx)
+        orig_h, orig_w = probe.shape[:2]
 
         # Compute resize scale factor (needed to adjust alignment offsets)
         resize_scale = 1.0
+        target = (0, 0)
         if self.config.resolution != "native":
-            target = RESOLUTION_PRESETS.get(self.config.resolution)
-            if target and stretched:
-                orig_h, orig_w = stretched[0].shape[:2]
+            target = RESOLUTION_PRESETS.get(self.config.resolution, (0, 0))
+            if target[0] and target[1]:
                 target_w, target_h = target
                 resize_scale = min(target_w / orig_w, target_h / orig_h)
                 logger.info(
@@ -200,9 +192,8 @@ class RenderPipeline:
                 )
 
         # Align if needed for linear pan (BEFORE resize, using raw frames)
-        cum_offsets: list[tuple[float, float]] = [(0.0, 0.0)]
         margins = (0, 0)
-        if self.config.transition == "linear-pan" and len(stretched) > 1:
+        if self.config.transition == "linear-pan" and len(active) > 1:
             logger.info("Stage: alignment (%d pairs) using raw frames", len(active) - 1)
             align_t0 = time.monotonic()
             self._alignments = []
@@ -223,11 +214,6 @@ class RenderPipeline:
                 "Alignment complete in %.1fs (%d pairs kept after outlier filter)",
                 time.monotonic() - align_t0, len(self._alignments),
             )
-
-            # Compute cumulative offsets
-            for a in self._alignments:
-                prev = cum_offsets[-1]
-                cum_offsets.append((prev[0] + a.dx, prev[1] + a.dy))
 
             # Scale pairwise offsets if resizing
             if resize_scale != 1.0:
@@ -250,38 +236,52 @@ class RenderPipeline:
             margins = (math.ceil(max_pair_dx), math.ceil(max_pair_dy))
             logger.info("Pairwise margins: %dx%d", margins[0], margins[1])
 
-        # Resize frames AFTER alignment offset computation
-        if resize_scale != 1.0:
-            target = RESOLUTION_PRESETS.get(self.config.resolution, (0, 0))
-            resize_t0 = time.monotonic()
-            stretched = [_resize_frame(f, target[0], target[1]) for f in stretched]
-            logger.info(
-                "Resized %d frames in %.1fs", len(stretched), time.monotonic() - resize_t0,
-            )
-
-        # Generate output frames with transitions
-        logger.info("Stage: generate output frames with transitions")
+        # Stream frames: stretch on-demand, keep at most 2 in memory
+        logger.info("Stage: stream debayer + stretch + transitions (%d frames)", len(active))
         gen_t0 = time.monotonic()
-        h, w = stretched[0].shape[:2]
-        crop_h = h - 2 * margins[1] if margins[1] else h
-        crop_w = w - 2 * margins[0] if margins[0] else w
 
         is_pan = self.config.transition == "linear-pan" and margins != (0, 0)
         mx, my = margins
 
-        for i in range(len(stretched)):
+        prev_stretched: np.ndarray | None = None
+        dims_logged = False
+
+        for i in range(len(active)):
+            idx = self.frames.index(active[i])
+            logger.info("Processing frame %d/%d", i + 1, len(active))
+            t0 = time.monotonic()
+
+            # Re-use probed first frame instead of stretching again
+            current_stretched = probe if i == 0 else self.stretch_frame(idx)
+
+            elapsed = time.monotonic() - t0
+            logger.debug("Frame %d/%d stretched in %.2fs", i + 1, len(active), elapsed)
+
+            # Resize if needed
+            if resize_scale != 1.0 and target[0] and target[1]:
+                current_stretched = _resize_frame(current_stretched, target[0], target[1])
+
+            # Log dimensions once
+            if not dims_logged:
+                h, w = current_stretched.shape[:2]
+                crop_h = h - 2 * my if my else h
+                crop_w = w - 2 * mx if mx else w
+                dims_logged = True
+
+            # Write key frame (for non-pan modes)
             if not is_pan:
-                # For crossfade/none: write key frame, then transition
-                write_frame_png(stretched[i], temp, frame_counter)
+                write_frame_png(current_stretched, temp, frame_counter)
                 frame_counter += 1
                 if on_progress:
                     on_progress(frame_counter, total_estimated)
 
-            # Add transition frames between this and next
-            if i < len(stretched) - 1:
-                trans = self._make_transition(stretched, i, margins)
+            # Generate transition with previous frame
+            if prev_stretched is not None and i > 0:
+                trans = self._make_transition_pair(
+                    prev_stretched, current_stretched, i - 1, margins,
+                )
                 logger.info(
-                    "Transition %d->%d: %d frames", i, i + 1, len(trans),
+                    "Transition %d->%d: %d frames", i - 1, i, len(trans),
                 )
                 for tf in trans:
                     write_frame_png(tf, temp, frame_counter)
@@ -289,30 +289,47 @@ class RenderPipeline:
                     if on_progress:
                         on_progress(frame_counter, total_estimated)
 
+            prev_stretched = current_stretched
+
         # For linear-pan: write last key frame (cropped at margin)
-        if is_pan:
-            last = stretched[-1][my:my + crop_h, mx:mx + crop_w]
+        if is_pan and prev_stretched is not None:
+            h, w = prev_stretched.shape[:2]
+            crop_h = h - 2 * my if my else h
+            crop_w = w - 2 * mx if mx else w
+            last = prev_stretched[my:my + crop_h, mx:mx + crop_w]
             write_frame_png(last, temp, frame_counter)
             frame_counter += 1
+
+        # Release reference
+        del probe
+        del prev_stretched
 
         gen_elapsed = time.monotonic() - gen_t0
         logger.info(
             "Wrote %d total frames to %s in %.1fs", frame_counter, temp, gen_elapsed,
         )
 
-    def _make_transition(
+    def _make_transition_pair(
         self,
-        stretched: list[np.ndarray],
-        i: int,
+        frame_a: np.ndarray,
+        frame_b: np.ndarray,
+        pair_index: int,
         margins: tuple[int, int],
     ) -> list[np.ndarray]:
-        """Generate transition frames between stretched[i] and stretched[i+1]."""
+        """Generate transition frames between two consecutive stretched frames.
+
+        Args:
+            frame_a: The previous stretched frame.
+            frame_b: The current stretched frame.
+            pair_index: Index of the pair in the alignment list.
+            margins: (mx, my) pixel margins for linear-pan cropping.
+        """
         if self.config.transition == "crossfade":
-            return crossfade(stretched[i], stretched[i + 1], self.config.crossfade_frames)
+            return crossfade(frame_a, frame_b, self.config.crossfade_frames)
         if self.config.transition == "linear-pan" and self._alignments:
             return linear_pan(
-                stretched[i], stretched[i + 1],
-                self._alignments[i],
+                frame_a, frame_b,
+                self._alignments[pair_index],
                 self.config.crossfade_frames,
                 margins[0], margins[1],
             )

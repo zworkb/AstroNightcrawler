@@ -153,9 +153,9 @@ def _build_callbacks(
     async def on_open_render() -> None:
         from src.config import settings as cfg
 
-        ui.navigate.to(
-            f"http://localhost:{cfg.port + 1}", new_tab=True,
-        )
+        port = cfg.port + 1
+        js = f'window.open("http://"+window.location.hostname+":{port}","_blank")'
+        ui.run_javascript(js)
 
     return {
         "start_capture": on_start_capture,

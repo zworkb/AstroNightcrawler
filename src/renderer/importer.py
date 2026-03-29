@@ -72,8 +72,13 @@ def load_frame(frame: FrameInfo) -> np.ndarray:
     Returns:
         2D numpy array (mono) or 3D (color, already debayered).
     """
-    with fits.open(frame.fits_path) as hdul:
-        return np.array(hdul[0].data)
+    try:
+        with fits.open(frame.fits_path, memmap=True) as hdul:
+            return np.array(hdul[0].data)
+    except ValueError:
+        # BZERO/BSCALE headers prevent strict memmap; fall back
+        with fits.open(frame.fits_path) as hdul:
+            return np.array(hdul[0].data)
 
 
 def _read_bayer_pattern(fits_path: Path) -> str | None:
