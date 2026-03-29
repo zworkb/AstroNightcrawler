@@ -67,7 +67,8 @@ def _build_top_bar(state: _RenderState) -> None:
 
             def _on_select(path: Path) -> None:
                 state.input_dir = str(path)
-                _load(state)
+                # Use ui.timer to trigger load in the correct NiceGUI context
+                ui.timer(0.1, lambda: _load(state), once=True)
 
             FolderBrowserDialog(on_select=_on_select).open(
                 Path(state.input_dir),
@@ -123,6 +124,10 @@ def _build_output_settings(state: _RenderState) -> None:
         ui.number(
             label="CRF", value=18, min=1, max=51,
         ).bind_value(state, "crf")
+        ui.select(
+            ["native", "4k", "1440p", "1080p", "720p"],
+            value="native", label="Resolution",
+        ).bind_value(state, "resolution")
         ui.input(
             label="Output", value="output.mp4",
         ).bind_value(state, "output_path")
@@ -143,6 +148,28 @@ def _build_output_settings(state: _RenderState) -> None:
             "Browse", icon="folder_open", on_click=_browse_output,
         ).props("dense")
 
+    # Advanced settings (collapsible)
+    with ui.expansion("Advanced Settings", icon="settings").classes("w-full"), \
+         ui.row().classes("w-full items-center gap-4"):
+        ui.number(
+            label="Frames/Transition", value=state.crossfade_frames,
+            min=2, max=120, step=1,
+        ).bind_value(state, "crossfade_frames").tooltip(
+            "Interpolated frames between key frames",
+        )
+        ui.number(
+            label="Align Max Dim (px)", value=state.align_max_dim,
+            min=512, max=8192, step=256,
+        ).bind_value(state, "align_max_dim").tooltip(
+            "Alignment downsampling (higher=slower)",
+        )
+        ui.number(
+            label="Align Sigma", value=state.align_sigma,
+            min=0.5, max=10.0, step=0.5,
+        ).bind_value(state, "align_sigma").tooltip(
+            "Star detection sensitivity (lower=more)",
+        )
+
 
 class _RenderState:
     """Mutable state for the render UI."""
@@ -154,9 +181,13 @@ class _RenderState:
         self.black: float = 0.0
         self.white: float = 1.0
         self.midtone: float = 0.5
-        self.transition: str = "crossfade"
-        self.fps: int = 24
-        self.crf: int = 18
+        self.transition: str = settings.render_transition
+        self.fps: int = settings.render_fps
+        self.crf: int = settings.render_crf
+        self.crossfade_frames: int = settings.render_crossfade_frames
+        self.align_max_dim: int = settings.render_align_max_dim
+        self.align_sigma: float = settings.render_align_sigma
+        self.resolution: str = settings.render_resolution
         self.output_path: str = "output.mp4"
         self.pipeline: RenderPipeline | None = None
         self.preview: ui.image | None = None
@@ -185,19 +216,24 @@ async def _load(state: _RenderState) -> None:
     ui.notify(f"Loaded {n} frames — generating thumbnails...")
     _set_render_status(state, f"Thumbnails 0/{n}...", 0.2)
 
-    # Build filmstrip incrementally to avoid blocking
+    # Generate ALL thumbnails in background thread (data only, no UI)
+    def _gen_all_thumbs() -> list[str | None]:
+        thumbs: list[str | None] = []
+        for i in range(n):
+            thumbs.append(_make_thumbnail(state, i))
+        return thumbs
+
+    thumbnails = await asyncio.to_thread(_gen_all_thumbs)
+
+    # Build filmstrip in UI thread (all at once)
     if state.filmstrip:
         state.filmstrip.clear()
-
-    for i in range(n):
-        thumb = await asyncio.to_thread(_make_thumbnail, state, i)
-        if thumb and state.filmstrip:
-            with state.filmstrip:
-                _render_thumb_card(state, i, state.pipeline.frames[i].index, thumb)
-        if state.progress:
-            state.progress.value = 0.2 + 0.7 * (i + 1) / n
-        if state.status_label:
-            state.status_label.text = f"Thumbnails {i + 1}/{n}..."
+        with state.filmstrip:
+            for i, thumb in enumerate(thumbnails):
+                if thumb:
+                    _render_thumb_card(
+                        state, i, state.pipeline.frames[i].index, thumb,
+                    )
 
     _set_render_status(state, "", 0)
     _show_preview(state, 0)
@@ -334,6 +370,7 @@ async def _render(state: _RenderState) -> None:
         await asyncio.to_thread(state.pipeline.render, output, on_progress)
         ui.notify(f"Video saved: {output}", type="positive")
     except Exception as exc:
+        logger.exception("Render failed: %s", exc)
         ui.notify(f"Render failed: {exc}", type="negative")
     finally:
         timer.cancel()
@@ -373,12 +410,18 @@ def _build_render_config(state: _RenderState) -> RenderConfig:
         stretch_params = StretchParams(
             state.black, state.white, state.midtone,
         )
+    # Apply alignment settings to global config before render
+    settings.render_align_max_dim = int(state.align_max_dim)
+    settings.render_align_sigma = float(state.align_sigma)
+
     return RenderConfig(
         fps=int(state.fps),
         crf=int(state.crf),
         stretch_mode=state.stretch_mode,
         stretch_params=stretch_params,
         transition=state.transition,
+        crossfade_frames=int(state.crossfade_frames),
+        resolution=state.resolution,
     )
 
 

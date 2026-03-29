@@ -48,6 +48,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["auto", "off", "RGGB", "GBRG", "GRBG", "BGGR"],
         default="auto",
     )
+    p.add_argument(
+        "--resolution",
+        choices=["native", "4k", "1440p", "1080p", "720p"],
+        default=settings.render_resolution,
+        help="Output video resolution preset",
+    )
     p.add_argument("--keep-frames", action="store_true", help="Keep intermediate PNGs")
     p.add_argument("--temp-dir", type=Path, default=None, help="Custom temp directory")
     p.add_argument("--ui", action="store_true", help="Start web UI instead of CLI render")
@@ -91,6 +97,7 @@ def _build_config(args: argparse.Namespace) -> RenderConfig:
         debayer_mode=debayer_map[args.debayer],
         transition=args.transition,
         crossfade_frames=args.crossfade_frames,
+        resolution=args.resolution,
         keep_frames=args.keep_frames,
         temp_dir=args.temp_dir,
     )

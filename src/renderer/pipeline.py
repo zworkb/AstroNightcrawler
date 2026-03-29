@@ -8,11 +8,12 @@ import shutil
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
 
+from src.config import settings
 from src.renderer.alignment import (
     AlignmentResult,
     align_pair,
@@ -26,18 +27,27 @@ from src.renderer.video import check_ffmpeg, encode_video, write_frame_png
 
 logger = logging.getLogger(__name__)
 
+RESOLUTION_PRESETS: dict[str, tuple[int, int]] = {
+    "native": (0, 0),
+    "4k": (3840, 2160),
+    "1440p": (2560, 1440),
+    "1080p": (1920, 1080),
+    "720p": (1280, 720),
+}
+
 
 @dataclass
 class RenderConfig:
     """Configuration for a render job."""
 
-    fps: int = 24
-    crf: int = 18
+    fps: int = field(default_factory=lambda: settings.render_fps)
+    crf: int = field(default_factory=lambda: settings.render_crf)
     stretch_mode: str = "auto"
     stretch_params: StretchParams | None = None
     debayer_mode: DebayerMode = DebayerMode.AUTO
-    transition: str = "crossfade"
-    crossfade_frames: int = 6
+    transition: str = field(default_factory=lambda: settings.render_transition)
+    crossfade_frames: int = field(default_factory=lambda: settings.render_crossfade_frames)
+    resolution: str = field(default_factory=lambda: settings.render_resolution)
     keep_frames: bool = False
     temp_dir: Path | None = None
 
@@ -176,20 +186,36 @@ class RenderPipeline:
             logger.debug("Frame %d/%d processed in %.2fs", i + 1, len(active), elapsed)
         logger.info("Debayer + stretch complete in %.1fs", time.monotonic() - stretch_t0)
 
-        # Align if needed for linear pan
+        # Compute resize scale factor (needed to adjust alignment offsets)
+        resize_scale = 1.0
+        if self.config.resolution != "native":
+            target = RESOLUTION_PRESETS.get(self.config.resolution)
+            if target and stretched:
+                orig_h, orig_w = stretched[0].shape[:2]
+                target_w, target_h = target
+                resize_scale = min(target_w / orig_w, target_h / orig_h)
+                logger.info(
+                    "Will resize frames to %dx%d (%s, scale=%.3f)",
+                    target_w, target_h, self.config.resolution, resize_scale,
+                )
+
+        # Align if needed for linear pan (BEFORE resize, using raw frames)
         cum_offsets: list[tuple[float, float]] = [(0.0, 0.0)]
         margins = (0, 0)
         if self.config.transition == "linear-pan" and len(stretched) > 1:
-            logger.info("Stage: alignment (%d pairs)", len(stretched) - 1)
+            logger.info("Stage: alignment (%d pairs) using raw frames", len(active) - 1)
             align_t0 = time.monotonic()
             self._alignments = []
-            for i in range(len(stretched) - 1):
-                mono_a = _to_mono(stretched[i])
-                mono_b = _to_mono(stretched[i + 1])
-                result = align_pair(mono_a, mono_b)
-                logger.debug(
-                    "Alignment pair %d-%d: dx=%.2f dy=%.2f confidence=%.3f",
-                    i, i + 1, result.dx, result.dy, result.confidence,
+            for i in range(len(active) - 1):
+                logger.info("Aligning pair %d-%d...", i, i + 1)
+                # Use RAW data (uint16) for alignment, not stretched 8-bit
+                raw_a = _load_mono_raw(active[i])
+                raw_b = _load_mono_raw(active[i + 1])
+                logger.info("  mono shapes: %s dtype=%s", raw_a.shape, raw_a.dtype)
+                result = align_pair(raw_a, raw_b)
+                logger.info(
+                    "  Result: dx=%.1f dy=%.1f success=%s",
+                    result.dx, result.dy, result.success,
                 )
                 self._alignments.append(result)
             self._alignments = filter_outlier_alignments(self._alignments)
@@ -203,15 +229,35 @@ class RenderPipeline:
                 prev = cum_offsets[-1]
                 cum_offsets.append((prev[0] + a.dx, prev[1] + a.dy))
 
-            # Normalize so all offsets are non-negative
-            min_x = min(o[0] for o in cum_offsets)
-            min_y = min(o[1] for o in cum_offsets)
-            cum_offsets = [(o[0] - min_x, o[1] - min_y) for o in cum_offsets]
+            # Scale pairwise offsets if resizing
+            if resize_scale != 1.0:
+                self._alignments = [
+                    AlignmentResult(
+                        dx=a.dx * resize_scale,
+                        dy=a.dy * resize_scale,
+                        rotation=a.rotation,
+                        success=a.success,
+                    )
+                    for a in self._alignments
+                ]
+                logger.info("Scaled alignment offsets by %.3f for resize", resize_scale)
 
-            # Margins from the max cumulative offset
-            max_x = max(o[0] for o in cum_offsets)
-            max_y = max(o[1] for o in cum_offsets)
-            margins = (math.ceil(max_x), math.ceil(max_y))
+            # Margins from max PAIRWISE offset (not cumulative!)
+            # Each transition is independent — margin must accommodate
+            # the largest single-pair shift in either direction
+            max_pair_dx = max(abs(a.dx) for a in self._alignments)
+            max_pair_dy = max(abs(a.dy) for a in self._alignments)
+            margins = (math.ceil(max_pair_dx), math.ceil(max_pair_dy))
+            logger.info("Pairwise margins: %dx%d", margins[0], margins[1])
+
+        # Resize frames AFTER alignment offset computation
+        if resize_scale != 1.0:
+            target = RESOLUTION_PRESETS.get(self.config.resolution, (0, 0))
+            resize_t0 = time.monotonic()
+            stretched = [_resize_frame(f, target[0], target[1]) for f in stretched]
+            logger.info(
+                "Resized %d frames in %.1fs", len(stretched), time.monotonic() - resize_t0,
+            )
 
         # Generate output frames with transitions
         logger.info("Stage: generate output frames with transitions")
@@ -220,30 +266,34 @@ class RenderPipeline:
         crop_h = h - 2 * margins[1] if margins[1] else h
         crop_w = w - 2 * margins[0] if margins[0] else w
 
+        is_pan = self.config.transition == "linear-pan" and margins != (0, 0)
+        mx, my = margins
+
         for i in range(len(stretched)):
-            if margins != (0, 0):
-                ox = int(cum_offsets[i][0])
-                oy = int(cum_offsets[i][1])
-                frame_img = stretched[i][oy:oy + crop_h, ox:ox + crop_w]
-            else:
-                frame_img = stretched[i]
-            write_frame_png(frame_img, temp, frame_counter)
-            frame_counter += 1
-            if on_progress:
-                on_progress(frame_counter, total_estimated)
+            if not is_pan:
+                # For crossfade/none: write key frame, then transition
+                write_frame_png(stretched[i], temp, frame_counter)
+                frame_counter += 1
+                if on_progress:
+                    on_progress(frame_counter, total_estimated)
 
             # Add transition frames between this and next
             if i < len(stretched) - 1:
-                trans = self._make_transition(stretched, i, margins, cum_offsets)
-                logger.debug(
-                    "Transition %d->%d: %d frames generated",
-                    i, i + 1, len(trans),
+                trans = self._make_transition(stretched, i, margins)
+                logger.info(
+                    "Transition %d->%d: %d frames", i, i + 1, len(trans),
                 )
                 for tf in trans:
                     write_frame_png(tf, temp, frame_counter)
                     frame_counter += 1
                     if on_progress:
                         on_progress(frame_counter, total_estimated)
+
+        # For linear-pan: write last key frame (cropped at margin)
+        if is_pan:
+            last = stretched[-1][my:my + crop_h, mx:mx + crop_w]
+            write_frame_png(last, temp, frame_counter)
+            frame_counter += 1
 
         gen_elapsed = time.monotonic() - gen_t0
         logger.info(
@@ -255,7 +305,6 @@ class RenderPipeline:
         stretched: list[np.ndarray],
         i: int,
         margins: tuple[int, int],
-        cum_offsets: list[tuple[float, float]],
     ) -> list[np.ndarray]:
         """Generate transition frames between stretched[i] and stretched[i+1]."""
         if self.config.transition == "crossfade":
@@ -266,8 +315,6 @@ class RenderPipeline:
                 self._alignments[i],
                 self.config.crossfade_frames,
                 margins[0], margins[1],
-                start_x=cum_offsets[i][0],
-                start_y=cum_offsets[i][1],
             )
         return []
 
@@ -279,8 +326,39 @@ class RenderPipeline:
         return Path(tempfile.mkdtemp(prefix="nc-render-"))
 
 
+def _resize_frame(frame: np.ndarray, target_w: int, target_h: int) -> np.ndarray:
+    """Resize a frame to fit within target dimensions, preserving aspect ratio.
+
+    Args:
+        frame: 8-bit RGB numpy array.
+        target_w: Maximum width.
+        target_h: Maximum height.
+
+    Returns:
+        Resized 8-bit RGB numpy array.
+    """
+    from PIL import Image
+
+    img = Image.fromarray(frame)
+    img.thumbnail((target_w, target_h), Image.LANCZOS)
+    return np.array(img)
+
+
 def _to_mono(frame: np.ndarray) -> np.ndarray:
     """Convert RGB to mono for alignment."""
     if frame.ndim == 3:
         return np.mean(frame, axis=2).astype(np.uint8)
     return frame
+
+
+def _load_mono_raw(frame: FrameInfo) -> np.ndarray:
+    """Load a frame as raw mono uint16 for alignment.
+
+    Skips debayering and stretching — just loads the raw FITS data.
+    For Bayer images, this is the CFA mosaic which still has enough
+    star signal for alignment.
+    """
+    data = load_frame(frame)
+    if data.ndim == 3:
+        return np.mean(data, axis=2).astype(data.dtype)
+    return data
