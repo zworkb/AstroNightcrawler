@@ -282,6 +282,11 @@ window.stelBridge = (() => {
                 });
             });
 
+            // Show fainter stars by reducing the minimum render size
+            if (engine && engine.core) {
+                engine.core.skip_point_radius = 0.05;
+            }
+
             // Register star data sources after engine is ready.
             if (engine && engine.core) {
                 const base = skydataUrl.replace(/\/$/, "");
