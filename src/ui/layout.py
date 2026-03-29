@@ -150,7 +150,17 @@ def _build_callbacks(
     async def on_start_capture() -> None:
         await _start_capture(state, capture_view)
 
-    return {"start_capture": on_start_capture}
+    async def on_open_render() -> None:
+        from src.config import settings as cfg
+
+        ui.navigate.to(
+            f"http://localhost:{cfg.port + 1}", new_tab=True,
+        )
+
+    return {
+        "start_capture": on_start_capture,
+        "open_render": on_open_render,
+    }
 
 
 async def _start_capture(

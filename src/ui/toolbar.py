@@ -196,7 +196,7 @@ class ToolbarComponent:
         )
 
     def _render_action_tools(self) -> None:
-        """Render the start-capture button."""
+        """Render the start-capture and render buttons."""
         btn = ui.button(
             "Start Capture",
             icon="play_arrow",
@@ -204,6 +204,14 @@ class ToolbarComponent:
             color="green",
         )
         btn.tooltip("Start Capture Sequence")
+
+        render_btn = ui.button(
+            "Render",
+            icon="movie",
+            on_click=self._action("open_render"),
+            color="orange",
+        )
+        render_btn.tooltip("Open Renderer")
 
     async def _on_ekos_export(self) -> None:
         """Export capture sequence as EKOS XML and trigger download."""
