@@ -31,6 +31,10 @@ class Settings(BaseSettings):
     settle_timeout: float = 30.0
     capture_timeout_extra: float = 60.0  # added to exposure time (DSLR needs more)
     unpark_delay: float = 3.0  # seconds to wait after unpark before first slew
+    render_fps: int = 24
+    render_crf: int = 18
+    render_transition: str = "crossfade"
+    render_crossfade_frames: int = 6
 
     model_config = {"env_prefix": "NC_", "env_file": ".env"}
 
