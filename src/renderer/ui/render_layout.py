@@ -1,0 +1,314 @@
+"""NiceGUI web UI for the Nightcrawler renderer."""
+
+from __future__ import annotations
+
+import base64
+import io
+import logging
+from pathlib import Path
+
+from nicegui import ui
+from PIL import Image
+
+from src.config import settings
+from src.renderer.pipeline import RenderConfig, RenderPipeline
+from src.renderer.stretch import StretchParams
+
+logger = logging.getLogger(__name__)
+
+
+def start_render_ui() -> None:
+    """Start the renderer as a standalone NiceGUI app."""
+    import uvicorn
+    from fastapi import FastAPI
+
+    fapp = FastAPI(title="Nightcrawler Renderer")
+
+    @ui.page("/")
+    def index() -> None:
+        create_render_layout()
+
+    ui.run_with(
+        fapp, title="Nightcrawler Renderer",
+        dark=True, storage_secret="nc-render",
+    )
+    uvicorn.run(fapp, host=settings.host, port=settings.port + 1)
+
+
+def create_render_layout() -> None:
+    """Build the renderer UI layout."""
+    state = _RenderState()
+
+    with ui.column().classes("w-full p-4 gap-4"):
+        _build_top_bar(state)
+        state.preview = ui.image().classes("w-full max-h-96 object-contain")
+        _build_stretch_controls(state)
+        state.filmstrip = ui.row().classes(
+            "w-full overflow-x-auto gap-1 py-2",
+        )
+        _build_output_settings(state)
+        state.progress = ui.linear_progress(value=0).classes("w-full")
+        state.status_label = ui.label("")
+
+
+def _build_top_bar(state: _RenderState) -> None:
+    """Build the top bar with browse, load, and render buttons.
+
+    Args:
+        state: Mutable render UI state.
+    """
+    with ui.row().classes("w-full items-center gap-2"):
+        ui.input(
+            label="Capture Directory", value="./output/",
+        ).bind_value(state, "input_dir")
+
+        def _browse() -> None:
+            from src.ui.folder_browser import FolderBrowserDialog
+
+            def _on_select(path: Path) -> None:
+                state.input_dir = str(path)
+                _load(state)
+
+            FolderBrowserDialog(on_select=_on_select).open(
+                Path(state.input_dir),
+            )
+
+        ui.button("Browse", icon="folder_open", on_click=_browse)
+        ui.button("Load", on_click=lambda: _load(state))
+        ui.button(
+            "Render", icon="play_arrow", color="green",
+            on_click=lambda: _render(state),
+        )
+
+
+def _build_stretch_controls(state: _RenderState) -> None:
+    """Build stretch parameter sliders.
+
+    Args:
+        state: Mutable render UI state.
+    """
+    with ui.row().classes("w-full items-center gap-4"):
+        ui.select(
+            ["auto", "histogram", "manual"], value="auto",
+            label="Stretch",
+        ).bind_value(state, "stretch_mode")
+        ui.slider(
+            min=0.0, max=0.5, step=0.01, value=0.0,
+        ).bind_value(state, "black").props("label")
+        ui.label("Black")
+        ui.slider(
+            min=0.5, max=1.0, step=0.01, value=1.0,
+        ).bind_value(state, "white").props("label")
+        ui.label("White")
+        ui.slider(
+            min=0.1, max=2.0, step=0.1, value=0.5,
+        ).bind_value(state, "midtone").props("label")
+        ui.label("Midtone")
+
+
+def _build_output_settings(state: _RenderState) -> None:
+    """Build output format controls.
+
+    Args:
+        state: Mutable render UI state.
+    """
+    with ui.row().classes("w-full items-center gap-4"):
+        ui.select(
+            ["none", "crossfade", "linear-pan"], value="crossfade",
+            label="Transition",
+        ).bind_value(state, "transition")
+        ui.number(
+            label="FPS", value=24, min=1, max=120,
+        ).bind_value(state, "fps")
+        ui.number(
+            label="CRF", value=18, min=1, max=51,
+        ).bind_value(state, "crf")
+        ui.input(
+            label="Output", value="output.mp4",
+        ).bind_value(state, "output_path")
+
+
+class _RenderState:
+    """Mutable state for the render UI."""
+
+    def __init__(self) -> None:
+        """Initialize default render state."""
+        self.input_dir: str = "./output/"
+        self.stretch_mode: str = "auto"
+        self.black: float = 0.0
+        self.white: float = 1.0
+        self.midtone: float = 0.5
+        self.transition: str = "crossfade"
+        self.fps: int = 24
+        self.crf: int = 18
+        self.output_path: str = "output.mp4"
+        self.pipeline: RenderPipeline | None = None
+        self.preview: ui.image | None = None
+        self.filmstrip: ui.row | None = None
+        self.progress: ui.linear_progress | None = None
+        self.status_label: ui.label | None = None
+        self.selected_frame: int = 0
+
+
+async def _load(state: _RenderState) -> None:
+    """Load a capture directory.
+
+    Args:
+        state: Mutable render UI state.
+    """
+    capture_dir = Path(state.input_dir)
+    config = RenderConfig(stretch_mode=state.stretch_mode)
+    state.pipeline = RenderPipeline(capture_dir, config)
+    state.pipeline.load()
+    ui.notify(f"Loaded {len(state.pipeline.frames)} frames")
+    _update_filmstrip(state)
+    _show_preview(state, 0)
+
+
+def _update_filmstrip(state: _RenderState) -> None:
+    """Rebuild the filmstrip thumbnails.
+
+    Args:
+        state: Mutable render UI state.
+    """
+    if not state.pipeline or not state.filmstrip:
+        return
+    state.filmstrip.clear()
+    with state.filmstrip:
+        for i, frame in enumerate(state.pipeline.frames):
+            idx = i  # capture for closure
+            thumb = _make_thumbnail(state, i)
+            if thumb:
+                _render_thumb_card(state, idx, frame.index, thumb)
+
+
+def _render_thumb_card(
+    state: _RenderState,
+    idx: int,
+    frame_index: int,
+    thumb: str,
+) -> None:
+    """Render a single filmstrip thumbnail card.
+
+    Args:
+        state: Mutable render UI state.
+        idx: Index into pipeline frames list.
+        frame_index: Capture point index for label.
+        thumb: Base64 data URI for thumbnail image.
+    """
+    with ui.card().classes("cursor-pointer").on(
+        "click", lambda _, ii=idx: _show_preview(state, ii),
+    ):
+        ui.image(thumb).classes("w-16 h-16 object-cover")
+        ui.label(f"#{frame_index}").classes("text-xs text-center")
+
+
+def _make_thumbnail(state: _RenderState, frame_idx: int) -> str | None:
+    """Generate a base64 thumbnail for a frame.
+
+    Args:
+        state: Mutable render UI state.
+        frame_idx: Index into pipeline frames list.
+
+    Returns:
+        Base64 data URI string, or None on failure.
+    """
+    if not state.pipeline:
+        return None
+    try:
+        stretched = state.pipeline.stretch_frame(frame_idx)
+        img = Image.fromarray(stretched)
+        img.thumbnail((128, 128))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG")
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        return f"data:image/jpeg;base64,{b64}"
+    except Exception:
+        logger.warning("Thumbnail failed for frame %d", frame_idx)
+        return None
+
+
+def _show_preview(state: _RenderState, frame_idx: int) -> None:
+    """Show a full-size preview of a frame.
+
+    Args:
+        state: Mutable render UI state.
+        frame_idx: Index into pipeline frames list.
+    """
+    if not state.pipeline or not state.preview:
+        return
+    state.selected_frame = frame_idx
+    try:
+        stretched = state.pipeline.stretch_frame(frame_idx)
+        img = Image.fromarray(stretched)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=90)
+        b64 = base64.b64encode(buf.getvalue()).decode()
+        state.preview.set_source(f"data:image/jpeg;base64,{b64}")
+    except Exception:
+        logger.exception("Preview failed for frame %d", frame_idx)
+
+
+async def _render(state: _RenderState) -> None:
+    """Run the full render pipeline.
+
+    Args:
+        state: Mutable render UI state.
+    """
+    if not state.pipeline:
+        ui.notify("Load a capture directory first", type="warning")
+        return
+
+    config = _build_render_config(state)
+    state.pipeline.config = config
+    _set_render_status(state, "Rendering...", 0.5)
+
+    try:
+        output = Path(state.output_path)
+        state.pipeline.render(output)
+        ui.notify(f"Video saved: {output}", type="positive")
+    except Exception as exc:
+        ui.notify(f"Render failed: {exc}", type="negative")
+    finally:
+        _set_render_status(state, "", 0)
+
+
+def _build_render_config(state: _RenderState) -> RenderConfig:
+    """Build RenderConfig from current UI state.
+
+    Args:
+        state: Mutable render UI state.
+
+    Returns:
+        Configured RenderConfig.
+    """
+    stretch_params = None
+    if state.stretch_mode == "manual":
+        stretch_params = StretchParams(
+            state.black, state.white, state.midtone,
+        )
+    return RenderConfig(
+        fps=int(state.fps),
+        crf=int(state.crf),
+        stretch_mode=state.stretch_mode,
+        stretch_params=stretch_params,
+        transition=state.transition,
+    )
+
+
+def _set_render_status(
+    state: _RenderState,
+    text: str,
+    progress: float,
+) -> None:
+    """Update the render status label and progress bar.
+
+    Args:
+        state: Mutable render UI state.
+        text: Status text to display.
+        progress: Progress bar value (0..1).
+    """
+    if state.status_label:
+        state.status_label.text = text
+    if state.progress:
+        state.progress.value = progress
