@@ -1522,7 +1522,219 @@ git commit -m "feat: renderer CLI entry point"
 
 ---
 
-### Task 10: Web UI — Render Layout
+### Task 10: Folder Browser Dialog
+
+**Files:**
+- Create: `src/ui/folder_browser.py`
+- Create: `tests/test_folder_browser.py`
+
+A reusable NiceGUI dialog for navigating the filesystem and selecting a directory. Shows folders and files, supports clicking into subfolders and navigating up with `..`. Highlights directories containing `manifest.json`.
+
+- [ ] **Step 1: Write failing tests**
+
+```python
+"""Tests for the folder browser dialog."""
+
+from pathlib import Path
+
+import pytest
+
+from src.ui.folder_browser import list_directory, DirectoryEntry
+
+
+class TestListDirectory:
+    def test_lists_subdirectories(self, tmp_path: Path) -> None:
+        (tmp_path / "subdir1").mkdir()
+        (tmp_path / "subdir2").mkdir()
+        (tmp_path / "file.txt").write_text("x")
+        entries = list_directory(tmp_path)
+        dirs = [e for e in entries if e.is_dir]
+        assert len(dirs) == 2
+
+    def test_parent_entry(self, tmp_path: Path) -> None:
+        child = tmp_path / "child"
+        child.mkdir()
+        entries = list_directory(child)
+        assert entries[0].name == ".."
+        assert entries[0].is_dir
+
+    def test_marks_manifest_dirs(self, tmp_path: Path) -> None:
+        seq_dir = tmp_path / "deneb"
+        seq_dir.mkdir()
+        (seq_dir / "manifest.json").write_text("{}")
+        entries = list_directory(tmp_path)
+        deneb = [e for e in entries if e.name == "deneb"][0]
+        assert deneb.has_manifest
+
+    def test_no_parent_at_root(self) -> None:
+        entries = list_directory(Path("/"))
+        names = [e.name for e in entries]
+        assert ".." not in names
+```
+
+- [ ] **Step 2: Run tests to verify they fail**
+
+- [ ] **Step 3: Implement folder browser**
+
+`src/ui/folder_browser.py`:
+```python
+"""Reusable folder browser dialog for NiceGUI."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable
+
+from nicegui import ui
+
+
+@dataclass
+class DirectoryEntry:
+    """A single entry in a directory listing."""
+
+    name: str
+    path: Path
+    is_dir: bool
+    has_manifest: bool = False
+    size: int = 0
+
+
+def list_directory(path: Path) -> list[DirectoryEntry]:
+    """List entries in a directory.
+
+    Directories first (sorted), then files (sorted).
+    Directories containing manifest.json are flagged.
+
+    Args:
+        path: Directory to list.
+
+    Returns:
+        List of DirectoryEntry, with '..' first if not root.
+    """
+    entries: list[DirectoryEntry] = []
+
+    # Parent navigation (not at filesystem root)
+    if path.parent != path:
+        entries.append(DirectoryEntry(
+            name="..", path=path.parent, is_dir=True,
+        ))
+
+    dirs: list[DirectoryEntry] = []
+    files: list[DirectoryEntry] = []
+
+    for item in sorted(path.iterdir()):
+        if item.name.startswith("."):
+            continue
+        if item.is_dir():
+            has_manifest = (item / "manifest.json").exists()
+            dirs.append(DirectoryEntry(
+                name=item.name, path=item, is_dir=True,
+                has_manifest=has_manifest,
+            ))
+        else:
+            files.append(DirectoryEntry(
+                name=item.name, path=item, is_dir=False,
+                size=item.stat().st_size,
+            ))
+
+    return entries + dirs + files
+
+
+class FolderBrowserDialog:
+    """A dialog for navigating and selecting a directory.
+
+    Usage:
+        dialog = FolderBrowserDialog(on_select=my_callback)
+        dialog.open(start_path)
+    """
+
+    def __init__(self, on_select: Callable[[Path], None]) -> None:
+        """Init with selection callback.
+
+        Args:
+            on_select: Called with the selected directory Path.
+        """
+        self._on_select = on_select
+        self._current: Path = Path.cwd()
+        self._dialog: ui.dialog | None = None
+
+    def open(self, start_path: Path | None = None) -> None:
+        """Open the dialog at the given path."""
+        self._current = start_path or Path.cwd()
+        self._show()
+
+    def _show(self) -> None:
+        """Build and show the dialog."""
+        if self._dialog:
+            self._dialog.close()
+
+        with ui.dialog() as self._dialog, ui.card().classes("w-96"):
+            ui.label("Select Capture Directory").classes("text-lg font-bold")
+            ui.label(str(self._current)).classes("text-xs text-grey break-all")
+            ui.separator()
+
+            entries = list_directory(self._current)
+            with ui.column().classes("w-full max-h-80 overflow-y-auto gap-0"):
+                for entry in entries:
+                    self._render_entry(entry)
+
+            with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                ui.button("Cancel", on_click=self._dialog.close).props("flat")
+                has_manifest = (self._current / "manifest.json").exists()
+                select_btn = ui.button(
+                    "Select",
+                    on_click=lambda: self._select(),
+                    color="green" if has_manifest else "primary",
+                )
+                if has_manifest:
+                    select_btn.tooltip("Contains manifest.json")
+
+        self._dialog.open()
+
+    def _render_entry(self, entry: DirectoryEntry) -> None:
+        """Render a single directory entry row."""
+        icon = "folder" if entry.is_dir else "description"
+        color = "text-green" if entry.has_manifest else ""
+
+        with ui.row().classes(
+            f"w-full items-center gap-2 px-2 py-1 cursor-pointer hover:bg-gray-800 {color}"
+        ).on("click", lambda _, e=entry: self._on_click(e)):
+            ui.icon(icon).classes("text-lg")
+            ui.label(entry.name).classes("flex-grow")
+            if entry.has_manifest:
+                ui.badge("manifest", color="green").props("dense")
+            elif not entry.is_dir:
+                size_kb = entry.size // 1024
+                ui.label(f"{size_kb} KB").classes("text-xs text-grey")
+
+    def _on_click(self, entry: DirectoryEntry) -> None:
+        """Handle click on an entry."""
+        if entry.is_dir:
+            self._current = entry.path
+            if self._dialog:
+                self._dialog.close()
+            self._show()
+
+    def _select(self) -> None:
+        """Confirm selection of current directory."""
+        if self._dialog:
+            self._dialog.close()
+        self._on_select(self._current)
+```
+
+- [ ] **Step 4: Run tests, lint, commit**
+
+```bash
+.venv/bin/python -m pytest tests/test_folder_browser.py -v
+.venv/bin/ruff check --fix src/ui/folder_browser.py tests/test_folder_browser.py
+git add src/ui/folder_browser.py tests/test_folder_browser.py
+git commit -m "feat: reusable folder browser dialog with manifest detection"
+```
+
+---
+
+### Task 11: Web UI — Render Layout
 
 **Files:**
 - Create: `src/renderer/ui/__init__.py`
@@ -1581,6 +1793,13 @@ def create_render_layout() -> None:
         # Top bar
         with ui.row().classes("w-full items-center gap-2"):
             ui.input(label="Capture Directory", value="./output/").bind_value(state, "input_dir")
+            def _browse() -> None:
+                from src.ui.folder_browser import FolderBrowserDialog
+                def _on_select(path: Path) -> None:
+                    state.input_dir = str(path)
+                    _load(state)
+                FolderBrowserDialog(on_select=_on_select).open(Path(state.input_dir))
+            ui.button("Browse", icon="folder_open", on_click=_browse)
             ui.button("Load", on_click=lambda: _load(state))
             ui.button("Render", icon="play_arrow", color="green",
                       on_click=lambda: _render(state))
@@ -1750,7 +1969,7 @@ git commit -m "feat: renderer web UI with filmstrip, preview, and stretch contro
 
 ---
 
-### Task 11: Integration — Render Button in Planner App
+### Task 12: Integration — Render Button in Planner App
 
 **Files:**
 - Modify: `src/ui/toolbar.py`
