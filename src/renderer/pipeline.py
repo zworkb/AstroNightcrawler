@@ -48,6 +48,7 @@ class RenderConfig:
     transition: str = field(default_factory=lambda: settings.render_transition)
     crossfade_frames: int = field(default_factory=lambda: settings.render_crossfade_frames)
     resolution: str = field(default_factory=lambda: settings.render_resolution)
+    speed: float = field(default_factory=lambda: settings.render_speed)
     keep_frames: bool = False
     temp_dir: Path | None = None
 
@@ -148,7 +149,10 @@ class RenderPipeline:
 
             logger.info("Encoding video to %s", output_path)
             encode_t0 = time.monotonic()
-            encode_video(temp, output_path, self.config.fps, self.config.crf)
+            encode_video(
+                temp, output_path,
+                self.config.fps, self.config.crf, self.config.speed,
+            )
             encode_elapsed = time.monotonic() - encode_t0
             file_size = output_path.stat().st_size if output_path.exists() else 0
             logger.info(

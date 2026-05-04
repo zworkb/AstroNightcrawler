@@ -45,6 +45,7 @@ def encode_video(
     output_path: Path,
     fps: int = 24,
     crf: int = 18,
+    speed: float = 1.0,
 ) -> None:
     """Encode numbered PNGs to video via ffmpeg.
 
@@ -53,6 +54,9 @@ def encode_video(
         output_path: Output video file path.
         fps: Frames per second.
         crf: Constant rate factor (quality, lower=better).
+        speed: Playback speed multiplier (1.0 = normal, 2.0 = 2x faster,
+            0.5 = half speed). Implemented via ffmpeg's ``setpts`` filter
+            so it is orthogonal to ``fps`` and frame count.
 
     Raises:
         RuntimeError: If ffmpeg is not installed or encoding fails.
@@ -65,11 +69,16 @@ def encode_video(
         "ffmpeg", "-y",
         "-framerate", str(fps),
         "-i", str(frames_dir / "frame_%06d.png"),
+    ]
+    if speed != 1.0:
+        # setpts=PTS/N → frame timestamps divided by N → playback N× faster
+        cmd.extend(["-vf", f"setpts=PTS/{speed}"])
+    cmd.extend([
         "-c:v", "libx264",
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
         str(output_path),
-    ]
+    ])
     logger.info("Running: %s", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:

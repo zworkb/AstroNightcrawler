@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     render_align_max_dim: int = 0  # 0 = no downsampling, >0 = max pixel dimension
     render_align_sigma: float = 2.0  # star detection sigma for alignment
     render_resolution: str = "native"  # native, 4k, 1440p, 1080p, 720p
+    render_speed: float = 1.0  # playback speed multiplier (1=normal, 2=2x faster)
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
     model_config = {"env_prefix": "NC_", "env_file": ".env"}

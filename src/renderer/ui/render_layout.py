@@ -124,6 +124,11 @@ def _build_output_settings(state: _RenderState) -> None:
         ui.number(
             label="CRF", value=18, min=1, max=51,
         ).bind_value(state, "crf")
+        ui.number(
+            label="Speed", value=1.0, min=0.1, max=10.0, step=0.1, format="%.2f",
+        ).bind_value(state, "speed").tooltip(
+            "Playback speed multiplier (1=normal, 2=2x faster, 0.5=half)",
+        )
         ui.select(
             ["native", "4k", "1440p", "1080p", "720p"],
             value="720p", label="Resolution",
@@ -184,6 +189,7 @@ class _RenderState:
         self.transition: str = "linear-pan"
         self.fps: int = settings.render_fps
         self.crf: int = settings.render_crf
+        self.speed: float = settings.render_speed
         self.crossfade_frames: int = settings.render_crossfade_frames
         self.align_max_dim: int = settings.render_align_max_dim
         self.align_sigma: float = settings.render_align_sigma
@@ -510,6 +516,7 @@ def _build_render_config(state: _RenderState) -> RenderConfig:
         transition=state.transition,
         crossfade_frames=int(state.crossfade_frames),
         resolution=state.resolution,
+        speed=float(state.speed),
     )
 
 

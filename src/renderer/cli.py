@@ -30,6 +30,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--fps", type=int, default=settings.render_fps)
     p.add_argument("--crf", type=int, default=settings.render_crf)
     p.add_argument(
+        "--speed", type=float, default=settings.render_speed,
+        help="Playback speed multiplier (1=normal, 2=2x faster, 0.5=half)",
+    )
+    p.add_argument(
         "--stretch", choices=["auto", "histogram", "manual"], default="auto",
     )
     p.add_argument("--black", type=float, default=0.0, help="Manual black point")
@@ -98,6 +102,7 @@ def _build_config(args: argparse.Namespace) -> RenderConfig:
         transition=args.transition,
         crossfade_frames=args.crossfade_frames,
         resolution=args.resolution,
+        speed=args.speed,
         keep_frames=args.keep_frames,
         temp_dir=args.temp_dir,
     )
