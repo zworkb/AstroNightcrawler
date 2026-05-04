@@ -40,6 +40,14 @@ def write_frame_png(
     return path
 
 
+# Frames written by the pipeline are timed against this reference rate.
+# `crossfade_frames=24` means "1 second of transition" at this rate, so
+# the natural duration of any clip is `total_frames / REFERENCE_FPS`.
+# This is fixed; user-facing `fps` controls the output framerate
+# (smoothness) and is independent of duration / speed.
+REFERENCE_FPS = 24
+
+
 def encode_video(
     frames_dir: Path,
     output_path: Path,
@@ -49,14 +57,22 @@ def encode_video(
 ) -> None:
     """Encode numbered PNGs to video via ffmpeg.
 
+    The input framerate is hard-coded to ``REFERENCE_FPS`` (24) so that
+    the natural duration of the clip depends only on the number of
+    pipeline-generated frames, not on the output framerate. The
+    user-facing ``fps`` parameter then sets the output framerate via
+    ``-r``: higher values improve playback smoothness (ffmpeg duplicates
+    frames as needed) without changing the duration.
+
     Args:
         frames_dir: Directory containing frame_NNNNNN.png files.
         output_path: Output video file path.
-        fps: Frames per second.
+        fps: Output framerate (smoothness). Higher = smoother playback.
+            Does not change duration.
         crf: Constant rate factor (quality, lower=better).
-        speed: Playback speed multiplier (1.0 = normal, 2.0 = 2x faster,
-            0.5 = half speed). Implemented via ffmpeg's ``setpts`` filter
-            so it is orthogonal to ``fps`` and frame count.
+        speed: Playback speed multiplier (1.0 = natural duration,
+            2.0 = 2x faster / half duration, 0.5 = half speed / double
+            duration). Truly orthogonal to ``fps``.
 
     Raises:
         RuntimeError: If ffmpeg is not installed or encoding fails.
@@ -67,13 +83,15 @@ def encode_video(
 
     cmd = [
         "ffmpeg", "-y",
-        "-framerate", str(fps),
+        "-framerate", str(REFERENCE_FPS),
         "-i", str(frames_dir / "frame_%06d.png"),
     ]
     if speed != 1.0:
-        # setpts=PTS/N → frame timestamps divided by N → playback N× faster
+        # setpts=PTS/N stretches/compresses timestamps. Combined with the
+        # fixed input framerate above, this controls duration only.
         cmd.extend(["-vf", f"setpts=PTS/{speed}"])
     cmd.extend([
+        "-r", str(fps),
         "-c:v", "libx264",
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
