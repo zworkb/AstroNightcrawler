@@ -90,7 +90,7 @@ def _build_stretch_controls(state: _RenderState) -> None:
     """
     with ui.row().classes("w-full items-center gap-4"):
         ui.select(
-            ["auto", "histogram", "manual"], value="auto",
+            ["auto", "histogram", "manual"], value="histogram",
             label="Stretch",
         ).bind_value(state, "stretch_mode")
         ui.slider(
@@ -115,7 +115,7 @@ def _build_output_settings(state: _RenderState) -> None:
     """
     with ui.row().classes("w-full items-center gap-4"):
         ui.select(
-            ["none", "crossfade", "linear-pan"], value="crossfade",
+            ["none", "crossfade", "linear-pan"], value="linear-pan",
             label="Transition",
         ).bind_value(state, "transition")
         ui.number(
@@ -126,7 +126,7 @@ def _build_output_settings(state: _RenderState) -> None:
         ).bind_value(state, "crf")
         ui.select(
             ["native", "4k", "1440p", "1080p", "720p"],
-            value="native", label="Resolution",
+            value="720p", label="Resolution",
         ).bind_value(state, "resolution")
         ui.input(
             label="Output", value="output.mp4",
@@ -177,17 +177,17 @@ class _RenderState:
     def __init__(self) -> None:
         """Initialize default render state."""
         self.input_dir: str = "./output/"
-        self.stretch_mode: str = "auto"
+        self.stretch_mode: str = "histogram"
         self.black: float = 0.0
         self.white: float = 1.0
         self.midtone: float = 0.5
-        self.transition: str = settings.render_transition
+        self.transition: str = "linear-pan"
         self.fps: int = settings.render_fps
         self.crf: int = settings.render_crf
         self.crossfade_frames: int = settings.render_crossfade_frames
         self.align_max_dim: int = settings.render_align_max_dim
         self.align_sigma: float = settings.render_align_sigma
-        self.resolution: str = settings.render_resolution
+        self.resolution: str = "720p"
         self.output_path: str = "output.mp4"
         self.pipeline: RenderPipeline | None = None
         self.preview: ui.image | None = None
@@ -195,6 +195,7 @@ class _RenderState:
         self.progress: ui.linear_progress | None = None
         self.status_label: ui.label | None = None
         self.selected_frame: int = 0
+        self.loading: bool = False
 
 
 async def _load(state: _RenderState) -> None:
@@ -205,39 +206,60 @@ async def _load(state: _RenderState) -> None:
     """
     import asyncio
 
-    capture_dir = Path(state.input_dir)
-    config = RenderConfig(stretch_mode=state.stretch_mode)
-    state.pipeline = RenderPipeline(capture_dir, config)
+    if state.loading:
+        ui.notify("Load already in progress", type="warning")
+        return
+    state.loading = True
+    try:
+        capture_dir = Path(state.input_dir)
+        config = RenderConfig(stretch_mode=state.stretch_mode)
+        # Build pipeline locally — only publish to state after load completes,
+        # so concurrent code paths never see a half-initialized pipeline.
+        pipeline = RenderPipeline(capture_dir, config)
 
-    _set_render_status(state, "Loading manifest...", 0.1)
-    await asyncio.to_thread(state.pipeline.load)
+        _set_render_status(state, "Loading manifest...", 0.1)
+        await asyncio.to_thread(pipeline.load)
+        state.pipeline = pipeline
 
-    n = len(state.pipeline.frames)
-    ui.notify(f"Loaded {n} frames — generating thumbnails...")
-    _set_render_status(state, f"Thumbnails 0/{n}...", 0.2)
+        n = len(pipeline.frames)
+        ui.notify(f"Loaded {n} frames — generating thumbnails...")
+        _set_render_status(state, f"Thumbnails 0/{n}...", 0.2)
 
-    # Generate ALL thumbnails in background thread (data only, no UI)
-    def _gen_all_thumbs() -> list[str | None]:
-        thumbs: list[str | None] = []
-        for i in range(n):
-            thumbs.append(_make_thumbnail(state, i))
-        return thumbs
+        # Generate thumbnails in batches so the UI gets progress updates
+        # between batches (each await yields to the event loop).
+        batch_size = 8
+        thumbnails: list[str | None] = []
+        for batch_start in range(0, n, batch_size):
+            batch_end = min(batch_start + batch_size, n)
 
-    thumbnails = await asyncio.to_thread(_gen_all_thumbs)
+            def _gen_batch(start: int = batch_start, end: int = batch_end) -> list[str | None]:
+                return [_make_thumbnail(state, i) for i in range(start, end)]
 
-    # Build filmstrip in UI thread (all at once)
-    if state.filmstrip:
-        state.filmstrip.clear()
-        with state.filmstrip:
-            for i, thumb in enumerate(thumbnails):
-                if thumb:
-                    _render_thumb_card(
-                        state, i, state.pipeline.frames[i].index, thumb,
-                    )
+            batch_thumbs = await asyncio.to_thread(_gen_batch)
+            thumbnails.extend(batch_thumbs)
+            progress = 0.2 + 0.7 * batch_end / n
+            _set_render_status(state, f"Thumbnails {batch_end}/{n}...", progress)
 
-    _set_render_status(state, "", 0)
-    _show_preview(state, 0)
-    ui.notify(f"Ready — {n} frames loaded")
+        # Build filmstrip in UI thread. If the page was closed during the
+        # await above, the filmstrip's client is gone and any UI access
+        # raises RuntimeError — bail out cleanly in that case.
+        try:
+            if state.filmstrip:
+                state.filmstrip.clear()
+                with state.filmstrip:
+                    for i, thumb in enumerate(thumbnails):
+                        if thumb:
+                            _render_thumb_card(
+                                state, i, pipeline.frames[i].index, thumb,
+                            )
+
+            _set_render_status(state, "", 0)
+            _show_preview(state, 0)
+            ui.notify(f"Ready — {n} frames loaded")
+        except RuntimeError as exc:
+            logger.info("UI gone before load finished: %s", exc)
+    finally:
+        state.loading = False
 
 
 def _update_filmstrip(state: _RenderState) -> None:
@@ -278,8 +300,17 @@ def _render_thumb_card(
         ui.label(f"#{frame_index}").classes("text-xs text-center")
 
 
+def _thumb_cache_path(frame_path: Path) -> Path:
+    """Return the disk-cache path for a frame's thumbnail."""
+    return frame_path.parent / ".thumbs" / f"{frame_path.stem}.jpg"
+
+
 def _make_thumbnail(state: _RenderState, frame_idx: int) -> str | None:
     """Generate a base64 thumbnail for a frame.
+
+    Uses an on-disk cache at ``<capture_dir>/.thumbs/<name>.jpg`` so
+    repeated loads of the same capture directory are near-instant.
+    Cache is invalidated when the FITS file mtime is newer.
 
     Args:
         state: Mutable render UI state.
@@ -296,6 +327,16 @@ def _make_thumbnail(state: _RenderState, frame_idx: int) -> str | None:
         from src.renderer.importer import load_frame
 
         frame = state.pipeline.frames[frame_idx]
+        cache_path = _thumb_cache_path(frame.fits_path)
+
+        # Cache hit: FITS unchanged since cache was written
+        if (
+            cache_path.exists()
+            and cache_path.stat().st_mtime >= frame.fits_path.stat().st_mtime
+        ):
+            b64 = base64.b64encode(cache_path.read_bytes()).decode()
+            return f"data:image/jpeg;base64,{b64}"
+
         data = load_frame(frame)
         # Quick downscale before expensive processing
         step = max(1, min(data.shape[0], data.shape[1]) // 64)
@@ -311,7 +352,16 @@ def _make_thumbnail(state: _RenderState, frame_idx: int) -> str | None:
         img.thumbnail((64, 64))
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=60)
-        b64 = base64.b64encode(buf.getvalue()).decode()
+        jpeg_bytes = buf.getvalue()
+
+        # Write to cache (best-effort — don't fail thumbnail on cache write error)
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_bytes(jpeg_bytes)
+        except OSError as exc:
+            logger.debug("Thumb cache write failed for %s: %s", cache_path, exc)
+
+        b64 = base64.b64encode(jpeg_bytes).decode()
         return f"data:image/jpeg;base64,{b64}"
     except Exception:
         logger.warning("Thumbnail failed for frame %d", frame_idx)
