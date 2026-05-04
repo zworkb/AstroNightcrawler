@@ -28,9 +28,18 @@ def start_render_ui() -> None:
     def index() -> None:
         create_render_layout()
 
+    # reconnect_timeout governs Socket.IO heartbeats in NiceGUI 3.x:
+    #   ping_interval = max(reconnect_timeout * 0.8, 4)
+    #   ping_timeout  = max(reconnect_timeout * 0.4, 2)
+    # Renders include CPU-heavy phases (astroalign find_transform takes
+    # 7-18s per pair, holding the GIL most of that time). With the default
+    # of 3.0 the browser declares the WS dead after ~6s and auto-reloads
+    # the page mid-render. 60s gives ~72s tolerance — comfortably above
+    # any single GIL-held phase we expect.
     ui.run_with(
         fapp, title="Nightcrawler Renderer",
-        dark=True, storage_secret="nc-render",
+        dark=True, reconnect_timeout=60.0,
+        storage_secret="nc-render",
     )
     uvicorn.run(fapp, host=settings.host, port=settings.port + 1)
 

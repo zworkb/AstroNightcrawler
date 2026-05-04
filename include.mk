@@ -5,7 +5,7 @@ SKYDATA_URL ?= https://stellarium-web.org/skydata
 .PHONY: run-capturing run-render skydata skydata-extra skydata-dso skydata-stars-deep
 
 run-render: $(INSTALL_TARGETS) .env
-	python -c "from src.renderer.cli import main; main(['--ui'])"
+	PYTHON_GIL=0 python -c "from src.renderer.cli import main; main(['--ui'])"
 run-capturing: $(INSTALL_TARGETS) .env skydata
 	NC_HOST=$(NC_HOST) NC_PORT=$(NC_PORT) python -c "from src.main import main; main()"
 
