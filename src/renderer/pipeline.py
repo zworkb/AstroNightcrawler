@@ -77,6 +77,21 @@ class RenderPipeline:
         """Return non-skipped frames."""
         return [f for f in self.frames if not f.skipped]
 
+    @property
+    def effective_crossfade_frames(self) -> int:
+        """Crossfade frame count adjusted for playback speed.
+
+        We scale by ``1/speed`` so slow-motion playback gets proportionally
+        more *real* interpolated frames, not just duplicated ones. Without
+        this, slow-mo stutters because motion-fps drops to
+        ``REFERENCE_FPS * speed`` (e.g. 6 fps at speed=0.25).
+
+        For speed > 1.0 the effective count goes down, which keeps the
+        transition smooth at the (shorter) target duration without
+        wasting CPU on frames that would just be dropped at encode time.
+        """
+        return max(1, round(self.config.crossfade_frames / self.config.speed))
+
     def skip_frame(self, index: int) -> None:
         """Mark a frame as skipped."""
         for f in self.frames:
@@ -175,7 +190,7 @@ class RenderPipeline:
         """Process all frames and write PNGs to temp directory."""
         frame_counter = 0
         # key frames + transition frames between each pair
-        total_estimated = len(active) + (len(active) - 1) * self.config.crossfade_frames
+        total_estimated = len(active) + (len(active) - 1) * self.effective_crossfade_frames
 
         # Probe first frame to determine dimensions for resize scale
         first_idx = self.frames.index(active[0])
@@ -333,12 +348,12 @@ class RenderPipeline:
             margins: (mx, my) pixel margins for linear-pan cropping.
         """
         if self.config.transition == "crossfade":
-            return crossfade(frame_a, frame_b, self.config.crossfade_frames)
+            return crossfade(frame_a, frame_b, self.effective_crossfade_frames)
         if self.config.transition == "linear-pan" and self._alignments:
             return linear_pan(
                 frame_a, frame_b,
                 self._alignments[pair_index],
-                self.config.crossfade_frames,
+                self.effective_crossfade_frames,
                 margins[0], margins[1],
             )
         return []

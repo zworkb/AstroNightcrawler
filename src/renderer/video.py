@@ -43,8 +43,10 @@ def write_frame_png(
 # Frames written by the pipeline are timed against this reference rate.
 # `crossfade_frames=24` means "1 second of transition" at this rate, so
 # the natural duration of any clip is `total_frames / REFERENCE_FPS`.
-# This is fixed; user-facing `fps` controls the output framerate
-# (smoothness) and is independent of duration / speed.
+# Playback speed is achieved by the pipeline scaling its effective
+# crossfade frame count (see RenderPipeline.effective_crossfade_frames),
+# so the encoder does not need a setpts filter — duration is already
+# correct in the frame stream.
 REFERENCE_FPS = 24
 
 
@@ -53,26 +55,26 @@ def encode_video(
     output_path: Path,
     fps: int = 24,
     crf: int = 18,
-    speed: float = 1.0,
+    speed: float = 1.0,  # noqa: ARG001 - kept for API compatibility
 ) -> None:
     """Encode numbered PNGs to video via ffmpeg.
 
-    The input framerate is hard-coded to ``REFERENCE_FPS`` (24) so that
-    the natural duration of the clip depends only on the number of
-    pipeline-generated frames, not on the output framerate. The
-    user-facing ``fps`` parameter then sets the output framerate via
-    ``-r``: higher values improve playback smoothness (ffmpeg duplicates
-    frames as needed) without changing the duration.
+    The input framerate is hard-coded to ``REFERENCE_FPS`` (24); the
+    user-facing ``fps`` parameter sets the output framerate via ``-r``,
+    so higher values smooth out playback (ffmpeg duplicates frames as
+    needed) without changing duration.
+
+    Speed is **not** handled here — the pipeline produces enough frames
+    for the desired duration directly, which gives real interpolated
+    motion at slow speeds instead of duplicated stutter.
 
     Args:
         frames_dir: Directory containing frame_NNNNNN.png files.
         output_path: Output video file path.
         fps: Output framerate (smoothness). Higher = smoother playback.
-            Does not change duration.
         crf: Constant rate factor (quality, lower=better).
-        speed: Playback speed multiplier (1.0 = natural duration,
-            2.0 = 2x faster / half duration, 0.5 = half speed / double
-            duration). Truly orthogonal to ``fps``.
+        speed: Accepted for API compatibility but unused — pipeline
+            handles speed by adjusting frame count.
 
     Raises:
         RuntimeError: If ffmpeg is not installed or encoding fails.
@@ -85,18 +87,12 @@ def encode_video(
         "ffmpeg", "-y",
         "-framerate", str(REFERENCE_FPS),
         "-i", str(frames_dir / "frame_%06d.png"),
-    ]
-    if speed != 1.0:
-        # setpts=PTS/N stretches/compresses timestamps. Combined with the
-        # fixed input framerate above, this controls duration only.
-        cmd.extend(["-vf", f"setpts=PTS/{speed}"])
-    cmd.extend([
         "-r", str(fps),
         "-c:v", "libx264",
         "-crf", str(crf),
         "-pix_fmt", "yuv420p",
         str(output_path),
-    ])
+    ]
     logger.info("Running: %s", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True, check=False)
     if result.returncode != 0:
