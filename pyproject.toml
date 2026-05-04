@@ -55,3 +55,12 @@ warn_return_any = true
 [[tool.mypy.overrides]]
 module = ["astropy.*", "numpy.*", "nicegui.*"]
 ignore_missing_imports = true
+
+[tool.uv]
+# Experiment for issue #107: suppress orjson so NiceGUI falls back to its
+# stdlib-json wrapper (json/builtin_wrapper.py). Required to make a free-
+# threaded Python (3.13t) install feasible — orjson does not yet support PEP
+# 703 free-threading and the maintainer targets CPython 3.15 only.
+# The marker `sys_platform == 'never'` evaluates to false on every platform,
+# so uv excludes orjson from dependency resolution entirely.
+override-dependencies = ["orjson ; sys_platform == 'never'"]

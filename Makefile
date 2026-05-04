@@ -82,7 +82,7 @@ PYTHON_PACKAGE_INSTALLER?=uv
 # specs like `3.11`, `3.14`, `cpython@3.14`. Defaults to PRIMARY_PYTHON value
 # for backward compatibility.
 # Default: $(PRIMARY_PYTHON)
-UV_PYTHON?=$(PRIMARY_PYTHON)
+UV_PYTHON?=3.13t
 
 # Flag whether to use virtual environment. If `false`, the
 # interpreter according to `PRIMARY_PYTHON` found in `PATH` is used.
