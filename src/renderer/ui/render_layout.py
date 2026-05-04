@@ -254,7 +254,7 @@ async def _load(state: _RenderState) -> None:
                             )
 
             _set_render_status(state, "", 0)
-            _show_preview(state, 0)
+            await _show_preview(state, 0)
             ui.notify(f"Ready — {n} frames loaded")
         except RuntimeError as exc:
             logger.info("UI gone before load finished: %s", exc)
@@ -368,8 +368,15 @@ def _make_thumbnail(state: _RenderState, frame_idx: int) -> str | None:
         return None
 
 
-def _show_preview(state: _RenderState, frame_idx: int) -> None:
-    """Show a full-size preview of a frame.
+async def _show_preview(state: _RenderState, frame_idx: int) -> None:
+    """Show a downsized preview of a frame.
+
+    Heavy work (stretch + JPEG encode) runs in a thread so the event
+    loop stays responsive — otherwise the WebSocket heartbeat fails
+    during long stretches and the browser disconnects.
+
+    The preview is downsized to ~1280 px before JPEG encoding so the
+    base64 data URI stays well under the Socket.IO message size limit.
 
     Args:
         state: Mutable render UI state.
@@ -378,15 +385,31 @@ def _show_preview(state: _RenderState, frame_idx: int) -> None:
     if not state.pipeline or not state.preview:
         return
     state.selected_frame = frame_idx
+
+    def _build() -> str | None:
+        try:
+            stretched = state.pipeline.stretch_frame(frame_idx)
+            img = Image.fromarray(stretched)
+            # The preview <img> is constrained to max-h-96 (~384 px);
+            # 1280 px gives plenty of headroom for zoom/expand without
+            # blowing past the WebSocket message size limit.
+            img.thumbnail((1280, 1280))
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=85)
+            b64 = base64.b64encode(buf.getvalue()).decode()
+            return f"data:image/jpeg;base64,{b64}"
+        except Exception:
+            logger.exception("Preview failed for frame %d", frame_idx)
+            return None
+
+    import asyncio
+    src = await asyncio.to_thread(_build)
+    if src is None:
+        return
     try:
-        stretched = state.pipeline.stretch_frame(frame_idx)
-        img = Image.fromarray(stretched)
-        buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=90)
-        b64 = base64.b64encode(buf.getvalue()).decode()
-        state.preview.set_source(f"data:image/jpeg;base64,{b64}")
-    except Exception:
-        logger.exception("Preview failed for frame %d", frame_idx)
+        state.preview.set_source(src)
+    except RuntimeError:
+        logger.info("Preview UI gone before update")
 
 
 async def _render(state: _RenderState) -> None:
@@ -418,13 +441,28 @@ async def _render(state: _RenderState) -> None:
     try:
         output = Path(state.output_path)
         await asyncio.to_thread(state.pipeline.render, output, on_progress)
-        ui.notify(f"Video saved: {output}", type="positive")
+        # The render can take minutes — the user may have closed the tab,
+        # in which case any UI access raises RuntimeError. The video is
+        # already saved to disk, so just log and move on.
+        try:
+            ui.notify(f"Video saved: {output}", type="positive")
+        except RuntimeError:
+            logger.info("Render completed but UI gone: %s", output)
     except Exception as exc:
         logger.exception("Render failed: %s", exc)
-        ui.notify(f"Render failed: {exc}", type="negative")
+        try:
+            ui.notify(f"Render failed: {exc}", type="negative")
+        except RuntimeError:
+            pass
     finally:
-        timer.cancel()
-        _set_render_status(state, "", 0)
+        try:
+            timer.cancel()
+        except RuntimeError:
+            pass
+        try:
+            _set_render_status(state, "", 0)
+        except RuntimeError:
+            pass
 
 
 def _update_render_progress(
