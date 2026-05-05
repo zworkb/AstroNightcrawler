@@ -44,3 +44,6 @@ requirements-mxdev.txt
 
 # Rendered videos
 *.mp4
+
+# Local-only notebooks
+notebooks/artemis2/
