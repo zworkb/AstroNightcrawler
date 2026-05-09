@@ -11,7 +11,7 @@ from nicegui import app, ui
 from PIL import Image
 
 from src.config import settings
-from src.renderer.pipeline import RenderConfig, RenderPipeline
+from src.renderer.pipeline import ProgressUpdate, RenderConfig, RenderPipeline
 from src.renderer.stretch import (
     AutoStretchParams,
     StretchParams,
@@ -1599,11 +1599,15 @@ async def _render(state: _RenderState) -> None:
     state.pipeline.config = config
     import asyncio
 
-    progress_state: dict[str, int] = {"current": 0, "total": 1}
+    # Shared state polled by ``ui.timer`` and written by the render
+    # thread. Holds the latest ``ProgressUpdate`` (or ``None`` until the
+    # first increment fires). The pipeline's ``_PhaseProgress`` already
+    # serialises increments under a lock, so a plain assignment here is
+    # safe — the GIL guarantees a single reference store is atomic.
+    progress_state: dict[str, ProgressUpdate | None] = {"latest": None}
 
-    def on_progress(current: int, total: int) -> None:
-        progress_state["current"] = current
-        progress_state["total"] = total
+    def on_progress(update: ProgressUpdate) -> None:
+        progress_state["latest"] = update
 
     _set_render_status(state, "Rendering...", 0.0)
     timer = ui.timer(
@@ -1640,21 +1644,35 @@ async def _render(state: _RenderState) -> None:
 
 def _update_render_progress(
     state: _RenderState,
-    progress_state: dict[str, int],
+    progress_state: dict[str, ProgressUpdate | None],
 ) -> None:
     """Read shared progress state and update the UI.
 
+    Single bar with a phase-dependent colour: orange while we are in the
+    ``"prepare"`` (alignment) phase, primary while in ``"render"``. The
+    bar value is the *within-phase* fraction — it resets at the phase
+    boundary so the user gets clean "5/12 done" feedback per phase
+    rather than a single bar that crawls weirdly because alignment
+    timing is unknown until measured (#123). The status label spells
+    out the phase + counter ("Preparing: pair 5/12") so there's
+    no ambiguity about which phase the bar is showing.
+
     Args:
         state: Mutable render UI state.
-        progress_state: Dict with 'current' and 'total' keys updated by
-            the render thread.
+        progress_state: Dict holding the latest :class:`ProgressUpdate`
+            written by the render thread under key ``"latest"``.
     """
-    total = progress_state["total"]
-    current = progress_state["current"]
-    if total > 0 and state.progress:
-        state.progress.value = current / total
+    update = progress_state["latest"]
+    if update is None:
+        return
+    if update.total > 0 and state.progress:
+        state.progress.value = update.current / update.total
+        # Distinct colour per phase so the bar reset at the boundary
+        # reads as "different work, same control" rather than a glitch.
+        color = "orange" if update.phase == "prepare" else "primary"
+        state.progress.props(f"color={color}")
     if state.status_label:
-        state.status_label.text = f"Rendering frame {current}/{total}..."
+        state.status_label.text = update.label
 
 
 def _build_render_config(state: _RenderState) -> RenderConfig:

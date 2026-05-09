@@ -6,12 +6,14 @@ import logging
 import math
 import shutil
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+from pydantic import BaseModel
 
 from src.config import settings
 from src.renderer.alignment import (
@@ -31,6 +33,65 @@ from src.renderer.transitions import crossfade, linear_pan
 from src.renderer.video import check_ffmpeg, encode_video, write_frame_png
 
 logger = logging.getLogger(__name__)
+
+
+class ProgressUpdate(BaseModel):
+    """Structured payload for render progress callbacks.
+
+    The progress callback receives one of these per increment. Phase
+    boundaries are signalled by the ``phase`` field switching values
+    (e.g. from ``"prepare"`` to ``"render"``); ``current`` resets to 1
+    at each boundary so each phase reads as a fresh 0..100% bar.
+
+    Pydantic ``BaseModel`` (project policy: pydantic over dataclass for
+    structured payloads) — JSON-serialisable, forward-compatible.
+    """
+
+    phase: str  # "prepare" or "render"
+    current: int  # frames done in this phase (1-based after first increment)
+    total: int  # total frames in this phase
+    label: str  # human-readable status, e.g. "Preparing: pair 5/12"
+
+
+ProgressCallback = Callable[[ProgressUpdate], None]
+
+
+class _PhaseProgress:
+    """Thread-safe progress counter for a single phase.
+
+    Workers call :meth:`increment` after each unit of work completes.
+    The lock protects the counter so the order of completion is
+    irrelevant; under sequential use this degenerates to a plain
+    counter with no contention. Designed for the upcoming
+    ``ThreadPoolExecutor`` parallelisation in #117 / #118.
+    """
+
+    def __init__(
+        self,
+        phase: str,
+        total: int,
+        callback: ProgressCallback | None,
+        label_fmt: Callable[[int, int], str],
+    ) -> None:
+        self._lock = threading.Lock()
+        self._phase = phase
+        self._total = total
+        self._current = 0
+        self._callback = callback
+        self._label_fmt = label_fmt
+
+    def increment(self, n: int = 1) -> None:
+        """Atomically advance the counter and emit a progress update."""
+        with self._lock:
+            self._current += n
+            current = self._current
+        if self._callback is not None:
+            self._callback(ProgressUpdate(
+                phase=self._phase,
+                current=current,
+                total=self._total,
+                label=self._label_fmt(current, self._total),
+            ))
 
 RESOLUTION_PRESETS: dict[str, tuple[int, int]] = {
     "native": (0, 0),
@@ -190,13 +251,18 @@ class RenderPipeline:
     def render(
         self,
         output_path: Path,
-        on_progress: Callable[[int, int], None] | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> None:
         """Run the full pipeline and produce a video file.
 
         Args:
             output_path: Path for the output video file.
-            on_progress: Optional callback ``(current_frame, total_frames)``.
+            on_progress: Optional callback receiving :class:`ProgressUpdate`
+                instances. The callback may be invoked from worker threads
+                (when parallelisation lands in #117/#118) and is expected
+                to be safe to call concurrently — the UI typically just
+                stashes the latest payload into a shared dict polled by a
+                ``ui.timer``.
         """
         if not check_ffmpeg():
             msg = "ffmpeg not found"
@@ -240,12 +306,24 @@ class RenderPipeline:
         self,
         active: list[FrameInfo],
         temp: Path,
-        on_progress: Callable[[int, int], None] | None = None,
+        on_progress: ProgressCallback | None = None,
     ) -> None:
         """Process all frames and write PNGs to temp directory."""
         frame_counter = 0
-        # key frames + transition frames between each pair
-        total_estimated = len(active) + (len(active) - 1) * self.effective_crossfade_frames
+        # Render-phase total mirrors what we will actually write to disk:
+        # - With transitions (linear-pan / crossfade): N-1 transitions of
+        #   ``effective_crossfade_frames`` each, plus the final key frame.
+        # - Without transitions (``transition == "none"``): one key frame
+        #   per active frame, no in-between frames.
+        # The previous formula double-counted in the transitions case;
+        # this one keeps the bar honest at 100% on completion.
+        has_transitions_for_total = self.config.transition in ("linear-pan", "crossfade")
+        if has_transitions_for_total:
+            total_estimated = (
+                (len(active) - 1) * self.effective_crossfade_frames + 1
+            )
+        else:
+            total_estimated = len(active)
 
         # Probe first frame to determine dimensions for resize scale
         first_idx = self.frames.index(active[0])
@@ -266,23 +344,45 @@ class RenderPipeline:
                 )
 
         # Align if needed for linear pan (BEFORE resize, using raw frames)
+        # Phase boundary: a "prepare" phase only exists when we actually
+        # have alignment work to do. For crossfade / single-frame inputs
+        # we skip straight to the render phase — emitting a fake 0-total
+        # prepare phase would just confuse the UI.
         margins = (0, 0)
-        if self.config.transition == "linear-pan" and len(active) > 1:
-            logger.info("Stage: alignment (%d pairs) using raw frames", len(active) - 1)
+        has_prepare_phase = (
+            self.config.transition == "linear-pan" and len(active) > 1
+        )
+        if has_prepare_phase:
+            num_pairs = len(active) - 1
+            logger.info("Stage: alignment (%d pairs) using raw frames", num_pairs)
             align_t0 = time.monotonic()
+            prepare_progress = _PhaseProgress(
+                phase="prepare",
+                total=num_pairs,
+                callback=on_progress,
+                label_fmt=lambda c, t: f"Preparing: pair {c}/{t}",
+            )
             self._alignments = []
-            for i in range(len(active) - 1):
+            for i in range(num_pairs):
                 logger.info("Aligning pair %d-%d...", i, i + 1)
                 # Use RAW data (uint16) for alignment, not stretched 8-bit
                 raw_a = _load_mono_raw(active[i])
                 raw_b = _load_mono_raw(active[i + 1])
                 logger.info("  mono shapes: %s dtype=%s", raw_a.shape, raw_a.dtype)
-                result = align_pair(raw_a, raw_b)
-                logger.info(
-                    "  Result: dx=%.1f dy=%.1f success=%s",
-                    result.dx, result.dy, result.success,
-                )
-                self._alignments.append(result)
+                try:
+                    result = align_pair(raw_a, raw_b)
+                    logger.info(
+                        "  Result: dx=%.1f dy=%.1f success=%s",
+                        result.dx, result.dy, result.success,
+                    )
+                    self._alignments.append(result)
+                finally:
+                    # Increment in finally so a worker exception under
+                    # future parallelisation can't deadlock the bar at
+                    # N-1/N. The counter reflects pairs *attempted*, not
+                    # just successful ones — outlier filtering happens
+                    # afterwards anyway.
+                    prepare_progress.increment()
             self._alignments = filter_outlier_alignments(self._alignments)
             logger.info(
                 "Alignment complete in %.1fs (%d pairs kept after outlier filter)",
@@ -313,6 +413,17 @@ class RenderPipeline:
         # Stream frames: stretch on-demand, keep at most 2 in memory
         logger.info("Stage: stream debayer + stretch + transitions (%d frames)", len(active))
         gen_t0 = time.monotonic()
+
+        # Phase boundary: switch from "prepare" to "render". The counter
+        # resets to 0 here so the UI's bar reads 0..total in this phase
+        # alone — weighting prepare vs render into a single bar would be
+        # fragile because alignment timing varies wildly with frame size.
+        render_progress = _PhaseProgress(
+            phase="render",
+            total=total_estimated,
+            callback=on_progress,
+            label_fmt=lambda c, t: f"Rendering: {c}/{t}",
+        )
 
         has_transitions = self.config.transition in ("linear-pan", "crossfade")
         is_pan = self.config.transition == "linear-pan" and margins != (0, 0)
@@ -347,8 +458,7 @@ class RenderPipeline:
             if not has_transitions:
                 write_frame_png(current_stretched, temp, frame_counter)
                 frame_counter += 1
-                if on_progress:
-                    on_progress(frame_counter, total_estimated)
+                render_progress.increment()
 
             # Generate transition with previous frame
             if prev_stretched is not None and i > 0:
@@ -361,8 +471,7 @@ class RenderPipeline:
                 for tf in trans:
                     write_frame_png(tf, temp, frame_counter)
                     frame_counter += 1
-                    if on_progress:
-                        on_progress(frame_counter, total_estimated)
+                    render_progress.increment()
 
             prev_stretched = current_stretched
 
@@ -377,6 +486,7 @@ class RenderPipeline:
                 last = prev_stretched
             write_frame_png(last, temp, frame_counter)
             frame_counter += 1
+            render_progress.increment()
 
         # Release reference
         del probe

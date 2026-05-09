@@ -8,7 +8,7 @@ from pathlib import Path
 
 from src.config import settings
 from src.renderer.debayer import DebayerMode
-from src.renderer.pipeline import RenderConfig, RenderPipeline
+from src.renderer.pipeline import ProgressUpdate, RenderConfig, RenderPipeline
 from src.renderer.stretch import StretchParams
 
 
@@ -132,7 +132,20 @@ def main(argv: list[str] | None = None) -> None:
     pipeline = RenderPipeline(args.input, config)
     pipeline.load()
     print(f"Loaded {len(pipeline.frames)} frames from {args.input}")  # noqa: T201
-    pipeline.render(args.output)
+
+    def _print_progress(update: ProgressUpdate) -> None:
+        # Plain stdout line per increment — overwritten in place so the
+        # terminal shows a single moving counter per phase rather than
+        # spamming N lines. ``\r`` works fine for CI logs (each phase
+        # ends naturally when the next phase's first line appears or
+        # the render finishes).
+        print(  # noqa: T201
+            f"\r[{update.phase}] {update.current}/{update.total}  {update.label}",
+            end="", flush=True,
+        )
+
+    pipeline.render(args.output, on_progress=_print_progress)
+    print()  # newline to terminate the in-place progress line  # noqa: T201
     print(f"Video saved to {args.output}")  # noqa: T201
 
 
