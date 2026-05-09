@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import shutil
+import sys
 import tempfile
 import threading
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -309,6 +312,23 @@ class RenderPipeline:
         on_progress: ProgressCallback | None = None,
     ) -> None:
         """Process all frames and write PNGs to temp directory."""
+        # Free-threading probe: log whether the GIL is actually disabled.
+        # Doesn't bail out — the alignment threadpool still works either
+        # way, just without the speedup. Issue #119 will add a stricter
+        # watchdog. ``_is_gil_enabled`` exists on 3.13+; older builds
+        # silently skip the check.
+        is_gil_enabled = getattr(sys, "_is_gil_enabled", None)
+        if is_gil_enabled is not None:
+            if is_gil_enabled():
+                logger.warning(
+                    "GIL is enabled — alignment parallelisation will not "
+                    "actually run in parallel. Check PYTHON_GIL=0 and "
+                    "that you are running a free-threaded Python build "
+                    "(python3.13t).",
+                )
+            else:
+                logger.info("Free-threading active (GIL disabled)")
+
         frame_counter = 0
         # Render-phase total mirrors what we will actually write to disk:
         # - With transitions (linear-pan / crossfade): N-1 transitions of
@@ -354,7 +374,11 @@ class RenderPipeline:
         )
         if has_prepare_phase:
             num_pairs = len(active) - 1
-            logger.info("Stage: alignment (%d pairs) using raw frames", num_pairs)
+            workers = min(_alignment_workers(), num_pairs)
+            logger.info(
+                "Stage: alignment (%d pairs) using raw frames, workers=%d",
+                num_pairs, workers,
+            )
             align_t0 = time.monotonic()
             prepare_progress = _PhaseProgress(
                 phase="prepare",
@@ -362,27 +386,39 @@ class RenderPipeline:
                 callback=on_progress,
                 label_fmt=lambda c, t: f"Preparing: pair {c}/{t}",
             )
-            self._alignments = []
-            for i in range(num_pairs):
-                logger.info("Aligning pair %d-%d...", i, i + 1)
-                # Use RAW data (uint16) for alignment, not stretched 8-bit
-                raw_a = _load_mono_raw(active[i])
-                raw_b = _load_mono_raw(active[i + 1])
-                logger.info("  mono shapes: %s dtype=%s", raw_a.shape, raw_a.dtype)
-                try:
-                    result = align_pair(raw_a, raw_b)
-                    logger.info(
-                        "  Result: dx=%.1f dy=%.1f success=%s",
-                        result.dx, result.dy, result.success,
-                    )
-                    self._alignments.append(result)
-                finally:
-                    # Increment in finally so a worker exception under
-                    # future parallelisation can't deadlock the bar at
-                    # N-1/N. The counter reflects pairs *attempted*, not
-                    # just successful ones — outlier filtering happens
-                    # afterwards anyway.
-                    prepare_progress.increment()
+
+            # Pattern A: submit all pairs, gather by index via the
+            # futures->idx map. This preserves pair order in
+            # ``self._alignments`` regardless of completion order, which
+            # is required because ``filter_outlier_alignments`` reasons
+            # about adjacency. Worker exceptions surface from
+            # ``fut.result()`` and propagate cleanly out of the ``with``
+            # block; the bar still advances because ``_align_one_pair``
+            # increments the counter in ``finally``.
+            #
+            # Memory note: each worker holds two raw frames at once
+            # (~50 MB at 4168x6224 uint16). With the default cap of 4
+            # workers that is ~400 MB peak just for alignment input —
+            # see :func:`_alignment_workers` for the override.
+            results: list[AlignmentResult | None] = [None] * num_pairs
+            with ThreadPoolExecutor(
+                max_workers=workers,
+                thread_name_prefix="nc-align",
+            ) as pool:
+                futures = {
+                    pool.submit(
+                        _align_one_pair,
+                        active[i], active[i + 1], i, prepare_progress,
+                    ): i
+                    for i in range(num_pairs)
+                }
+                for fut in as_completed(futures):
+                    idx = futures[fut]
+                    results[idx] = fut.result()
+
+            # All slots are populated unless a worker raised, in which
+            # case ``fut.result()`` already re-raised above.
+            self._alignments = [r for r in results if r is not None]
             self._alignments = filter_outlier_alignments(self._alignments)
             logger.info(
                 "Alignment complete in %.1fs (%d pairs kept after outlier filter)",
@@ -573,3 +609,65 @@ def _load_mono_raw(frame: FrameInfo) -> np.ndarray:
     if data.ndim == 3:
         return np.mean(data, axis=2).astype(data.dtype)
     return data
+
+
+def _alignment_workers() -> int:
+    """Resolve the alignment worker pool size.
+
+    Defaults to ``min(os.cpu_count(), 4)``. The cap of 4 reflects memory
+    headroom: each pair holds two raw frames simultaneously (~50 MB at
+    4168x6224 uint16), so 4 workers x 2 frames ≈ 400 MB peak just for
+    alignment input — comfortable on a typical laptop, painful past that.
+
+    Override via ``NC_RENDER_WORKERS=<n>``:
+      - positive int: use exactly that many workers
+      - ``-1``: use all available cores (``os.cpu_count()``)
+
+    Issue #120 will replace this helper with a richer config knob; the
+    env var stays as the escape hatch.
+    """
+    cpu = os.cpu_count() or 1
+    env = os.environ.get("NC_RENDER_WORKERS")
+    if env:
+        try:
+            n = int(env)
+        except ValueError:
+            logger.warning(
+                "Ignoring invalid NC_RENDER_WORKERS=%r (expected int)", env,
+            )
+        else:
+            if n == -1:
+                return cpu
+            return max(1, n)
+    return min(cpu, 4)
+
+
+def _align_one_pair(
+    frame_a: FrameInfo,
+    frame_b: FrameInfo,
+    pair_idx: int,
+    progress: _PhaseProgress,
+) -> AlignmentResult:
+    """Worker: align a single frame pair.
+
+    Loads both raw frames, runs ``align_pair`` and returns the result.
+    The progress counter is incremented in ``finally`` so the bar still
+    advances if the worker raises — important for UX (the bar would
+    otherwise freeze at N-1/N while the exception propagates back to
+    the main thread).
+    """
+    try:
+        raw_a = _load_mono_raw(frame_a)
+        raw_b = _load_mono_raw(frame_b)
+        logger.info(
+            "Pair %d: mono shapes=%s dtype=%s",
+            pair_idx, raw_a.shape, raw_a.dtype,
+        )
+        result = align_pair(raw_a, raw_b)
+        logger.info(
+            "Pair %d: dx=%.1f dy=%.1f success=%s",
+            pair_idx, result.dx, result.dy, result.success,
+        )
+        return result
+    finally:
+        progress.increment()
