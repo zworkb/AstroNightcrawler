@@ -58,6 +58,28 @@ def derive_manual_params_from_auto(data: np.ndarray) -> StretchParams:
     return StretchParams(black=black, white=white, midtone=midtone)
 
 
+def derive_manual_params_from_auto_then_identity(
+    data: np.ndarray,  # noqa: ARG001 — kept for symmetry with sibling derive_* helpers
+) -> StretchParams:
+    """Identity manual params for use on top of an auto-stretched image.
+
+    Returns ``StretchParams(black=0.0, white=1.0, midtone=0.99)`` — a
+    linear no-op (gamma 1.0) that leaves the already-stretched 8-bit
+    data untouched. The user can then tune black/white/midtone away
+    from this identity baseline.
+
+    Args:
+        data: Input array — accepted for symmetry with the other
+            ``derive_manual_params_from_*`` helpers; the values are
+            not inspected because the identity mapping doesn't depend
+            on the data.
+
+    Returns:
+        Identity ``StretchParams``.
+    """
+    return StretchParams(black=0.0, white=1.0, midtone=0.99)
+
+
 def derive_manual_params_from_histogram(
     data: np.ndarray,
     low: float = 0.001,
@@ -223,8 +245,11 @@ def apply_stretch(
 
     Args:
         data: Input FITS data.
-        mode: "auto", "histogram", or "manual".
-        params: Manual parameters (required if mode=="manual").
+        mode: ``"auto"``, ``"histogram"``, ``"manual"``, or
+            ``"auto+manual"`` (Siril-style two-stage: auto-stretch
+            first, then user-tuned manual stretch on the 8-bit result).
+        params: Manual parameters (required if mode is ``"manual"`` or
+            ``"auto+manual"``).
         mono_to_rgb: Convert mono to 3-channel.
 
     Returns:
@@ -236,6 +261,8 @@ def apply_stretch(
         result = histogram_stretch(data)
     elif mode == "manual" and params:
         result = manual_stretch(data, params)
+    elif mode == "auto+manual" and params:
+        result = manual_stretch(auto_stretch(data), params)
     else:
         result = auto_stretch(data)
 

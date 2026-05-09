@@ -16,6 +16,7 @@ from src.renderer.stretch import (
     StretchParams,
     compute_histogram,
     derive_manual_params_from_auto,
+    derive_manual_params_from_auto_then_identity,
     derive_manual_params_from_histogram,
 )
 
@@ -122,7 +123,7 @@ def _build_stretch_controls(state: _RenderState) -> None:
         if not state.pipeline:
             return
         state.pipeline.config.stretch_mode = state.stretch_mode
-        if state.stretch_mode == "manual":
+        if state.stretch_mode in ("manual", "auto+manual"):
             state.pipeline.config.stretch_params = StretchParams(
                 state.black, state.white, state.midtone,
             )
@@ -164,24 +165,55 @@ def _build_stretch_controls(state: _RenderState) -> None:
                     prev_mode, exc,
                 )
 
+        # Entering auto+manual: seed identity params so the user sees
+        # the pure auto-stretch first and tunes from there.
+        if new_mode == "auto+manual" and prev_mode != "auto+manual":
+            import numpy as np
+            seeded = derive_manual_params_from_auto_then_identity(
+                np.empty(0),  # data is unused; kept for symmetry
+            )
+            state._seeding = True
+            try:
+                state.black = seeded.black
+                state.white = seeded.white
+                state.midtone = seeded.midtone
+            finally:
+                state._seeding = False
+
         state.pipeline.config.stretch_mode = new_mode
-        if new_mode == "manual":
+        if new_mode in ("manual", "auto+manual"):
             state.pipeline.config.stretch_params = StretchParams(
                 state.black, state.white, state.midtone,
             )
         _refresh_histogram_overlay(state)
+        # Mode switch may change the histogram source bucket
+        # (raw <-> auto-stretched); ``_schedule_preview_refresh`` runs
+        # ``_show_preview`` which fetches the histogram with the
+        # matching kind for the new mode.
         _schedule_preview_refresh(state)
 
     with ui.column().classes("w-full gap-2"):
         with ui.row().classes("w-full items-center gap-4"):
             ui.select(
-                ["auto", "histogram", "manual"], value="histogram",
+                options={
+                    "auto": "auto",
+                    "histogram": "histogram",
+                    "manual": "manual",
+                    "auto+manual": "Manual (linked to auto)",
+                },
+                value="histogram",
                 label="Stretch", on_change=_on_mode_change,
             ).bind_value(state, "stretch_mode")
             ui.label(
                 "Drag the B / W / M handles on the histogram below "
-                "(active in manual mode).",
+                "(active in manual modes).",
             ).classes("text-xs text-gray-400")
+            ui.label(
+                "Histogram shows the auto-stretched image — "
+                "tune B/W/M on top of it.",
+            ).classes("text-xs text-gray-400").bind_visibility_from(
+                state, "stretch_mode", value="auto+manual",
+            )
 
         _build_histogram_widget(state, on_param_change=_on_param_change)
 
@@ -753,7 +785,8 @@ def _refresh_histogram(state: _RenderState) -> None:
     chart = state.histogram_chart
     if chart is None:
         return
-    hist = state.histogram_cache.get(state.selected_frame)
+    kind = _histogram_kind_for_mode(state.stretch_mode)
+    hist = state.histogram_cache.get((state.selected_frame, kind))
     log_counts = hist["log_counts"] if hist is not None else None
     chart.options.clear()
     chart.options.update(_build_echart_options(
@@ -798,7 +831,7 @@ def _refresh_histogram_overlay(state: _RenderState) -> None:
         except RuntimeError:
             pass
 
-    is_manual = state.stretch_mode == "manual"
+    is_interactive = state.stretch_mode in ("manual", "auto+manual")
     overlay_id = state.histogram_overlay_id
     # Push current zoom into the JS state too — handle positions need it
     # to convert between normalized [0, 1] values and pixel x within the
@@ -807,9 +840,9 @@ def _refresh_histogram_overlay(state: _RenderState) -> None:
         f"(function(){{"
         f"  const ov = document.getElementById({overlay_id!r});"
         f"  if (ov) {{"
-        f"    ov.style.opacity = {1.0 if is_manual else 0.4};"
+        f"    ov.style.opacity = {1.0 if is_interactive else 0.4};"
         f"    ov.style.pointerEvents = "
-        f"      {'\"auto\"' if is_manual else '\"none\"'};"
+        f"      {'\"auto\"' if is_interactive else '\"none\"'};"
         f"  }}"
         f"  if (window.__histState && window.__histState[{overlay_id!r}]) {{"
         f"    window.__histState[{overlay_id!r}].zoom = "
@@ -841,10 +874,10 @@ def _on_handle_drag(state: _RenderState, which: str, value: float) -> None:
         return
     if not state.pipeline:
         return
-    # Only manual mode actually feeds drags into the pipeline; in other
-    # modes the handles are visually dimmed and pointer-events are off,
-    # but JS-level guards can race so double-check here.
-    if state.stretch_mode != "manual":
+    # Only the manual modes actually feed drags into the pipeline; in
+    # other modes the handles are visually dimmed and pointer-events are
+    # off, but JS-level guards can race so double-check here.
+    if state.stretch_mode not in ("manual", "auto+manual"):
         return
 
     if which == "black":
@@ -893,12 +926,31 @@ def _on_zoom_change(state: _RenderState) -> None:
     _refresh_histogram(state)
 
 
-async def _get_histogram(state: _RenderState, frame_idx: int) -> dict | None:
+def _histogram_kind_for_mode(mode: str) -> str:
+    """Pick the histogram source bucket that matches a stretch mode.
+
+    The ``auto+manual`` mode operates on the auto-stretched 8-bit image,
+    so its histogram must come from that data. All other modes use the
+    raw debayered frame (``manual`` for backwards compatibility, ``auto``
+    and ``histogram`` because they're non-interactive — see issue #112
+    decision table).
+    """
+    return "auto-stretched" if mode == "auto+manual" else "raw"
+
+
+async def _get_histogram(
+    state: _RenderState,
+    frame_idx: int,
+    kind: str = "raw",
+) -> dict | None:
     """Fetch a frame's histogram, computing it off-thread if not cached.
 
     Args:
         state: Mutable render UI state.
         frame_idx: Frame index in the pipeline.
+        kind: ``"raw"`` for the debayered frame, ``"auto-stretched"``
+            for the post-auto-stretch uint8 result. Determines both
+            the cache bucket and the data source.
 
     Returns:
         Histogram dict (see :func:`compute_histogram`), or ``None`` if
@@ -906,7 +958,8 @@ async def _get_histogram(state: _RenderState, frame_idx: int) -> dict | None:
     """
     if not state.pipeline:
         return None
-    hit = state.histogram_cache.get(frame_idx)
+    cache_key = (frame_idx, kind)
+    hit = state.histogram_cache.get(cache_key)
     if hit is not None:
         return hit
 
@@ -914,15 +967,20 @@ async def _get_histogram(state: _RenderState, frame_idx: int) -> dict | None:
 
     def _work() -> dict | None:
         try:
-            data = state.pipeline.debayered_frame(frame_idx)
+            if kind == "auto-stretched":
+                data = state.pipeline.auto_stretched_frame(frame_idx)
+            else:
+                data = state.pipeline.debayered_frame(frame_idx)
             return compute_histogram(data, bins=_HIST_BINS)
         except Exception:
-            logger.exception("Histogram failed for frame %d", frame_idx)
+            logger.exception(
+                "Histogram failed for frame %d (kind=%s)", frame_idx, kind,
+            )
             return None
 
     hist = await asyncio.to_thread(_work)
     if hist is not None:
-        state.histogram_cache[frame_idx] = hist
+        state.histogram_cache[cache_key] = hist
     return hist
 
 
@@ -1047,10 +1105,14 @@ class _RenderState:
         # refreshed via _refresh_histogram on every frame change.
         self.histogram_chart: ui.echart | None = None
         self.histogram_overlay_id: str = ""
-        # Per-frame histogram cache. Keyed on frame_idx; cleared in _load.
+        # Per-frame histogram cache. Keyed on ``(frame_idx, kind)`` where
+        # ``kind`` is ``"raw"`` (debayered uint16) or ``"auto-stretched"``
+        # (uint8 after ZScale+Asinh) — separate buckets so switching
+        # between ``manual`` and ``auto+manual`` doesn't re-compute the
+        # 50-100 ms auto-stretch each time. Cleared in ``_load``.
         # Drag events repaint the curve only, so we never recompute the
         # heavy histogram during a drag.
-        self.histogram_cache: dict[int, dict] = {}
+        self.histogram_cache: dict[tuple[int, str], dict] = {}
         # Number-input refs (kept so seed-paths can update them via the
         # standard bind mechanism — no special wiring needed here).
         self.black_input: ui.number | None = None
@@ -1284,8 +1346,11 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
 
     # Keep the histogram widget in sync with the displayed frame. The
     # heavy compute happens off-thread inside ``_get_histogram``; cache
-    # hits are essentially free.
-    await _get_histogram(state, frame_idx)
+    # hits are essentially free. Source bucket follows the active mode:
+    # ``auto+manual`` reads the auto-stretched data, everything else
+    # reads raw debayered.
+    kind = _histogram_kind_for_mode(state.stretch_mode)
+    await _get_histogram(state, frame_idx, kind=kind)
     try:
         _refresh_histogram(state)
     except RuntimeError:
@@ -1374,7 +1439,7 @@ def _build_render_config(state: _RenderState) -> RenderConfig:
         Configured RenderConfig.
     """
     stretch_params = None
-    if state.stretch_mode == "manual":
+    if state.stretch_mode in ("manual", "auto+manual"):
         stretch_params = StretchParams(
             state.black, state.white, state.midtone,
         )

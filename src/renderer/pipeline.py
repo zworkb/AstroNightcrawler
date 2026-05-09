@@ -21,7 +21,7 @@ from src.renderer.alignment import (
 )
 from src.renderer.debayer import DebayerMode, debayer_frame, detect_bayer
 from src.renderer.importer import FrameInfo, load_frame, load_manifest
-from src.renderer.stretch import StretchParams, apply_stretch
+from src.renderer.stretch import StretchParams, apply_stretch, auto_stretch
 from src.renderer.transitions import crossfade, linear_pan
 from src.renderer.video import check_ffmpeg, encode_video, write_frame_png
 
@@ -112,6 +112,21 @@ class RenderPipeline:
         data = load_frame(frame)
         pattern = detect_bayer(frame.bayer_pattern, self.config.debayer_mode)
         return debayer_frame(data, pattern)
+
+    def auto_stretched_frame(self, frame_idx: int) -> np.ndarray:
+        """Load, debayer, and auto-stretch a frame to uint8.
+
+        Used by the ``auto+manual`` UI mode: the histogram widget
+        operates on this 8-bit, well-distributed result so the
+        black/white/midtone handles cover a meaningful range.
+
+        Args:
+            frame_idx: Index into self.frames list.
+
+        Returns:
+            8-bit numpy array (uint8), pre-stretched via ZScale + Asinh.
+        """
+        return auto_stretch(self.debayered_frame(frame_idx))
 
     def stretch_frame(self, frame_idx: int) -> np.ndarray:
         """Load, debayer, and stretch a single frame.
