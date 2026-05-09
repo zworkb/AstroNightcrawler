@@ -21,7 +21,12 @@ from src.renderer.alignment import (
 )
 from src.renderer.debayer import DebayerMode, debayer_frame, detect_bayer
 from src.renderer.importer import FrameInfo, load_frame, load_manifest
-from src.renderer.stretch import StretchParams, apply_stretch, auto_stretch
+from src.renderer.stretch import (
+    AutoStretchParams,
+    StretchParams,
+    apply_stretch,
+    auto_stretch,
+)
 from src.renderer.transitions import crossfade, linear_pan
 from src.renderer.video import check_ffmpeg, encode_video, write_frame_png
 
@@ -51,6 +56,12 @@ class RenderConfig:
     speed: float = field(default_factory=lambda: settings.render_speed)
     keep_frames: bool = False
     temp_dir: Path | None = None
+    # Auto-stretch freeze: if True and ``auto_stretch_params`` is set,
+    # the frozen ZScale limits are reused for every frame instead of
+    # being recomputed per-frame. Eliminates brightness flicker between
+    # frames and gives WYSIWYG (preview matches render). See issue #114.
+    auto_stretch_freeze: bool = True
+    auto_stretch_params: AutoStretchParams | None = None
 
 
 class RenderPipeline:
@@ -113,7 +124,11 @@ class RenderPipeline:
         pattern = detect_bayer(frame.bayer_pattern, self.config.debayer_mode)
         return debayer_frame(data, pattern)
 
-    def auto_stretched_frame(self, frame_idx: int) -> np.ndarray:
+    def auto_stretched_frame(
+        self,
+        frame_idx: int,
+        params: AutoStretchParams | None = None,
+    ) -> np.ndarray:
         """Load, debayer, and auto-stretch a frame to uint8.
 
         Used by the ``auto+manual`` UI mode: the histogram widget
@@ -122,11 +137,14 @@ class RenderPipeline:
 
         Args:
             frame_idx: Index into self.frames list.
+            params: Optional pre-computed ZScale limits to apply
+                (frozen auto-stretch — see issue #114). If ``None``,
+                ZScale is computed fresh from this frame's data.
 
         Returns:
             8-bit numpy array (uint8), pre-stretched via ZScale + Asinh.
         """
-        return auto_stretch(self.debayered_frame(frame_idx))
+        return auto_stretch(self.debayered_frame(frame_idx), params=params)
 
     def stretch_frame(self, frame_idx: int) -> np.ndarray:
         """Load, debayer, and stretch a single frame.
@@ -149,11 +167,19 @@ class RenderPipeline:
             debayered.shape[2] if debayered.ndim == 3 else 1,
         )
 
+        # Pass frozen auto-stretch params through when freeze is active —
+        # apply_stretch only consults them in auto / auto+manual modes.
+        auto_params = (
+            self.config.auto_stretch_params
+            if self.config.auto_stretch_freeze
+            else None
+        )
         stretched = apply_stretch(
             debayered,
             mode=self.config.stretch_mode,
             params=self.config.stretch_params,
             mono_to_rgb=True,
+            auto_params=auto_params,
         )
         logger.debug(
             "Stretched frame %d: min=%d max=%d",

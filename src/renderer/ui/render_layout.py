@@ -13,7 +13,9 @@ from PIL import Image
 from src.config import settings
 from src.renderer.pipeline import RenderConfig, RenderPipeline
 from src.renderer.stretch import (
+    AutoStretchParams,
     StretchParams,
+    compute_auto_stretch_params,
     compute_histogram,
     derive_manual_params_from_auto,
     derive_manual_params_from_auto_then_identity,
@@ -215,6 +217,8 @@ def _build_stretch_controls(state: _RenderState) -> None:
                 state, "stretch_mode", value="auto+manual",
             )
 
+        _build_auto_freeze_controls(state)
+
         _build_histogram_widget(state, on_param_change=_on_param_change)
 
         with ui.row().classes("w-full items-center gap-4"):
@@ -251,6 +255,126 @@ def _build_stretch_controls(state: _RenderState) -> None:
         _on_handle_drag(state, which, value_f)
 
     ui.on("histogram_handle_drag", _on_handle_drag_event)
+
+
+def _build_auto_freeze_controls(state: _RenderState) -> None:
+    """Build the auto-stretch freeze row (switch + reference indicator).
+
+    The row sits between the stretch-mode dropdown and the histogram
+    widget. It's only visible when the active mode is ``auto`` or
+    ``auto+manual`` — in ``manual`` and ``histogram`` modes the freeze
+    has no effect, so the controls would be confusing.
+
+    Wiring:
+      - The switch toggles ``state.auto_stretch_freeze``. Turning it on
+        with no params yet computes them on the currently-selected
+        frame (so the user gets immediate, sensible behavior).
+      - The "Aktuelles Frame übernehmen" button recomputes the params
+        from ``state.selected_frame`` and updates ``ref_frame``.
+      - When the user navigates the filmstrip to a frame ≠ ref_frame
+        the button highlights (primary color) — see issue #114 thread.
+
+    Args:
+        state: Mutable render UI state.
+    """
+    def _on_freeze_toggle() -> None:
+        if not state.pipeline:
+            return
+        if state.auto_stretch_freeze and state.auto_stretch_params is None:
+            try:
+                data = state.pipeline.debayered_frame(state.selected_frame)
+                state.auto_stretch_params = compute_auto_stretch_params(data)
+                state.auto_stretch_ref_frame = state.selected_frame
+            except Exception as exc:
+                logger.warning(
+                    "Could not compute auto-stretch params on toggle: %s", exc,
+                )
+        # Auto-stretched buckets in the cache are now stale (whether we
+        # turned freeze on or off, the auto-stretched data changes).
+        state.histogram_cache.clear()
+        _update_ref_frame_indicator(state)
+        _refresh_histogram(state)
+        _schedule_preview_refresh(state)
+
+    def _on_set_ref_frame() -> None:
+        if not state.pipeline:
+            return
+        try:
+            data = state.pipeline.debayered_frame(state.selected_frame)
+            state.auto_stretch_params = compute_auto_stretch_params(data)
+            state.auto_stretch_ref_frame = state.selected_frame
+        except Exception as exc:
+            logger.warning(
+                "Could not compute auto-stretch params from frame %d: %s",
+                state.selected_frame, exc,
+            )
+            return
+        state.histogram_cache.clear()
+        _update_ref_frame_indicator(state)
+        _refresh_histogram(state)
+        _schedule_preview_refresh(state)
+
+    row = ui.row().classes("w-full items-center gap-3")
+    state.auto_stretch_freeze_row = row
+    with row:
+        ui.switch("Auto-Stretch einfrieren").bind_value(
+            state, "auto_stretch_freeze",
+        ).on_value_change(lambda _e: _on_freeze_toggle()).tooltip(
+            "Verwendet die ZScale-Parameter eines Referenz-Frames für "
+            "alle Frames im Render. Verhindert Helligkeits-Flackern "
+            "und liefert WYSIWYG (Preview = Render).",
+        )
+        state.auto_stretch_ref_label = ui.label(
+            "Referenz: —",
+        ).classes("text-xs text-gray-400")
+        state.auto_stretch_apply_button = ui.button(
+            "Aktuelles Frame übernehmen",
+            on_click=lambda: _on_set_ref_frame(),
+        ).props("dense color=grey-7")
+
+    # Visible only in auto / auto+manual modes — the freeze has no
+    # effect in manual/histogram modes. ``bind_visibility_from`` with a
+    # custom predicate handles the OR cleanly.
+    row.bind_visibility_from(
+        state, "stretch_mode",
+        backward=lambda mode: mode in ("auto", "auto+manual"),
+    )
+
+
+def _update_ref_frame_indicator(state: _RenderState) -> None:
+    """Sync the reference-frame label and apply-button highlight.
+
+    Called whenever the reference frame changes (toggle, button click)
+    OR the selected frame changes (filmstrip navigation). The button
+    highlight communicates "the reference is stale, you might want to
+    update it" — primary color when ``selected_frame != ref_frame``,
+    de-emphasized grey otherwise.
+    """
+    if state.auto_stretch_ref_label is not None:
+        ref = state.auto_stretch_ref_frame
+        try:
+            state.auto_stretch_ref_label.text = (
+                f"Referenz: Frame {ref}" if ref is not None else "Referenz: —"
+            )
+        except RuntimeError:
+            # Client gone — safe to skip.
+            pass
+    if state.auto_stretch_apply_button is not None:
+        is_stale = (
+            state.auto_stretch_ref_frame is not None
+            and state.auto_stretch_ref_frame != state.selected_frame
+        )
+        try:
+            if is_stale:
+                state.auto_stretch_apply_button.props(
+                    "dense color=primary",
+                )
+            else:
+                state.auto_stretch_apply_button.props(
+                    "dense color=grey-7",
+                )
+        except RuntimeError:
+            pass
 
 
 def _build_histogram_widget(
@@ -965,10 +1089,18 @@ async def _get_histogram(
 
     import asyncio
 
+    # Snapshot the frozen-auto params at request time so a concurrent
+    # toggle/recompute can't race the worker thread reading state.
+    frozen_params = (
+        state.auto_stretch_params if state.auto_stretch_freeze else None
+    )
+
     def _work() -> dict | None:
         try:
             if kind == "auto-stretched":
-                data = state.pipeline.auto_stretched_frame(frame_idx)
+                data = state.pipeline.auto_stretched_frame(
+                    frame_idx, params=frozen_params,
+                )
             else:
                 data = state.pipeline.debayered_frame(frame_idx)
             return compute_histogram(data, bins=_HIST_BINS)
@@ -1126,6 +1258,19 @@ class _RenderState:
         self.histogram_zoom: float = 1.0
         # Label showing the current zoom factor next to the slider.
         self.histogram_zoom_label: ui.label | None = None
+        # Auto-stretch freeze (issue #114). When enabled, ``auto_stretch_params``
+        # captures ZScale vmin/vmax from a reference frame and is reused
+        # for all frames during render — eliminates brightness flicker
+        # in auto / auto+manual modes and gives WYSIWYG previews.
+        self.auto_stretch_freeze: bool = True
+        self.auto_stretch_params: AutoStretchParams | None = None
+        self.auto_stretch_ref_frame: int | None = None
+        # UI handles populated by ``_build_auto_freeze_controls`` —
+        # updated by ``_update_ref_frame_indicator`` whenever the
+        # reference frame or selected frame changes.
+        self.auto_stretch_ref_label: ui.label | None = None
+        self.auto_stretch_apply_button: ui.button | None = None
+        self.auto_stretch_freeze_row: ui.row | None = None
 
 
 async def _load(state: _RenderState) -> None:
@@ -1152,6 +1297,29 @@ async def _load(state: _RenderState) -> None:
         state.pipeline = pipeline
         # New pipeline => stale histograms are no longer valid.
         state.histogram_cache.clear()
+        # Seed initial auto-stretch params from frame 0 so freeze=True
+        # has something sensible at first paint. The user can switch
+        # the reference frame later via "Aktuelles Frame übernehmen".
+        # If frame 0 fails to load for any reason we fall back to
+        # params=None — the freeze becomes effectively inactive until
+        # the user sets a reference manually.
+        state.auto_stretch_params = None
+        state.auto_stretch_ref_frame = None
+        if pipeline.frames:
+            try:
+                ref_data = await asyncio.to_thread(
+                    pipeline.debayered_frame, 0,
+                )
+                state.auto_stretch_params = await asyncio.to_thread(
+                    compute_auto_stretch_params, ref_data,
+                )
+                state.auto_stretch_ref_frame = 0
+            except Exception as exc:
+                logger.warning(
+                    "Could not seed auto-stretch params from frame 0: %s",
+                    exc,
+                )
+        _update_ref_frame_indicator(state)
 
         n = len(pipeline.frames)
         ui.notify(f"Loaded {n} frames — generating thumbnails...")
@@ -1317,6 +1485,16 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
     if not state.pipeline or not state.preview:
         return
     state.selected_frame = frame_idx
+    # Selected frame changed — re-evaluate ref-frame staleness so the
+    # "Aktuelles Frame übernehmen" button highlights immediately when
+    # the user navigates away from the current reference.
+    _update_ref_frame_indicator(state)
+
+    # Keep the pipeline config in sync with state so the preview
+    # honors the freeze toggle and current frozen params (WYSIWYG —
+    # preview matches what the render will produce).
+    state.pipeline.config.auto_stretch_freeze = state.auto_stretch_freeze
+    state.pipeline.config.auto_stretch_params = state.auto_stretch_params
 
     def _build() -> str | None:
         try:
@@ -1456,6 +1634,8 @@ def _build_render_config(state: _RenderState) -> RenderConfig:
         crossfade_frames=int(state.crossfade_frames),
         resolution=state.resolution,
         speed=float(state.speed),
+        auto_stretch_freeze=state.auto_stretch_freeze,
+        auto_stretch_params=state.auto_stretch_params,
     )
 
 

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 from astropy.visualization import AsinhStretch, ZScaleInterval
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +19,25 @@ class StretchParams:
     black: float = 0.0
     white: float = 1.0
     midtone: float = 0.5
+
+
+class AutoStretchParams(BaseModel):
+    """Frozen ZScale interval limits per channel.
+
+    Captured once on a reference frame and reused across all frames in a
+    render to avoid brightness flicker between frames in ``auto`` and
+    ``auto+manual`` modes (see issue #114).
+
+    Lengths:
+        - mono: ``vmin``/``vmax`` are length-1 lists
+        - RGB: length-3 lists, indexed by channel
+
+    Pydantic ``BaseModel`` (not ``@dataclass``) so the params are JSON-
+    serializable for future persistence next to render output.
+    """
+
+    vmin: list[float]
+    vmax: list[float]
 
 
 def derive_manual_params_from_auto(data: np.ndarray) -> StretchParams:
@@ -156,11 +176,51 @@ def compute_histogram(
     return {"edges": edges, "counts": counts, "log_counts": log_counts}
 
 
-def auto_stretch(data: np.ndarray) -> np.ndarray:
+def compute_auto_stretch_params(data: np.ndarray) -> AutoStretchParams:
+    """Run ZScale and capture vmin/vmax without applying the stretch.
+
+    Used to "freeze" the auto-stretch interval limits on a reference
+    frame so they can be reused across all frames in a render — see
+    :class:`AutoStretchParams` and issue #114.
+
+    Args:
+        data: Input array (uint16, float, any shape). 3D arrays are
+            treated as (H, W, C) and produce per-channel limits.
+
+    Returns:
+        :class:`AutoStretchParams` with one entry per channel (length 1
+        for mono, length 3 for RGB).
+    """
+    interval = ZScaleInterval()
+    fdata = data.astype(np.float64)
+
+    if fdata.ndim == 3:
+        vmins: list[float] = []
+        vmaxs: list[float] = []
+        for ch in range(fdata.shape[2]):
+            vmin_ch, vmax_ch = interval.get_limits(fdata[:, :, ch])
+            vmins.append(float(vmin_ch))
+            vmaxs.append(float(vmax_ch))
+        return AutoStretchParams(vmin=vmins, vmax=vmaxs)
+
+    vmin, vmax = interval.get_limits(fdata)
+    return AutoStretchParams(vmin=[float(vmin)], vmax=[float(vmax)])
+
+
+def auto_stretch(
+    data: np.ndarray,
+    params: AutoStretchParams | None = None,
+) -> np.ndarray:
     """Apply ZScale + AsinhStretch and return 8-bit result.
 
     Args:
         data: Input array (uint16, float, any shape).
+        params: Optional pre-computed ZScale limits. If provided, those
+            ``vmin``/``vmax`` are used instead of running ZScale on
+            ``data`` — this is how the "freeze" feature gets WYSIWYG
+            and consistent brightness across frames (see issue #114).
+            Per-channel for 3D data (length-3 lists), single-element
+            for mono (length-1).
 
     Returns:
         8-bit numpy array.
@@ -172,12 +232,20 @@ def auto_stretch(data: np.ndarray) -> np.ndarray:
     if fdata.ndim == 3:
         result = np.empty_like(fdata)
         for ch in range(fdata.shape[2]):
-            vmin, vmax = interval.get_limits(fdata[:, :, ch])
+            if params is not None:
+                vmin = params.vmin[ch]
+                vmax = params.vmax[ch]
+            else:
+                vmin, vmax = interval.get_limits(fdata[:, :, ch])
             normed = np.clip((fdata[:, :, ch] - vmin) / (vmax - vmin + 1e-10), 0, 1)
             result[:, :, ch] = stretch(normed)
         return (result * 255).astype(np.uint8)
 
-    vmin, vmax = interval.get_limits(fdata)
+    if params is not None:
+        vmin = params.vmin[0]
+        vmax = params.vmax[0]
+    else:
+        vmin, vmax = interval.get_limits(fdata)
     normed = np.clip((fdata - vmin) / (vmax - vmin + 1e-10), 0, 1)
     stretched = stretch(normed)
     return (stretched * 255).astype(np.uint8)
@@ -240,6 +308,7 @@ def apply_stretch(
     mode: str = "auto",
     params: StretchParams | None = None,
     mono_to_rgb: bool = False,
+    auto_params: AutoStretchParams | None = None,
 ) -> np.ndarray:
     """Apply stretch based on mode selection.
 
@@ -251,20 +320,24 @@ def apply_stretch(
         params: Manual parameters (required if mode is ``"manual"`` or
             ``"auto+manual"``).
         mono_to_rgb: Convert mono to 3-channel.
+        auto_params: Optional frozen ZScale limits (see issue #114). If
+            provided and mode is ``"auto"`` or ``"auto+manual"``, these
+            limits are reused instead of recomputing per frame —
+            eliminates brightness flicker across frames.
 
     Returns:
         8-bit sRGB numpy array.
     """
     if mode == "auto":
-        result = auto_stretch(data)
+        result = auto_stretch(data, params=auto_params)
     elif mode == "histogram":
         result = histogram_stretch(data)
     elif mode == "manual" and params:
         result = manual_stretch(data, params)
     elif mode == "auto+manual" and params:
-        result = manual_stretch(auto_stretch(data), params)
+        result = manual_stretch(auto_stretch(data, params=auto_params), params)
     else:
-        result = auto_stretch(data)
+        result = auto_stretch(data, params=auto_params)
 
     if mono_to_rgb and result.ndim == 2:
         result = np.stack([result, result, result], axis=2)
