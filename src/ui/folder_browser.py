@@ -32,6 +32,13 @@ def list_directory(path: Path) -> list[DirectoryEntry]:
     Returns:
         List of DirectoryEntry, with '..' first if not root.
     """
+    # Resolve to an absolute path. With a relative path like ``Path(".")``,
+    # ``.parent`` returns the same path, so the ``..`` parent-navigation
+    # entry would never be added — visible to the user as "I can't go up
+    # from here". Resolving once at the entry point fixes the symptom for
+    # every caller.
+    path = path.resolve()
+
     entries: list[DirectoryEntry] = []
 
     # Parent navigation (not at filesystem root)
