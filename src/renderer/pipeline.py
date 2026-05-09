@@ -6,12 +6,11 @@ import logging
 import math
 import os
 import shutil
-import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable, Iterator
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -25,6 +24,7 @@ from src.renderer.alignment import (
     filter_outlier_alignments,
 )
 from src.renderer.debayer import DebayerMode, debayer_frame, detect_bayer
+from src.renderer.gil_watchdog import check_gil_state, reset_run_state
 from src.renderer.importer import FrameInfo, load_frame, load_manifest
 from src.renderer.stretch import (
     AutoStretchParams,
@@ -320,22 +320,12 @@ class RenderPipeline:
         on_progress: ProgressCallback | None = None,
     ) -> None:
         """Process all frames and write PNGs to temp directory."""
-        # Free-threading probe: log whether the GIL is actually disabled.
-        # Doesn't bail out — the alignment threadpool still works either
-        # way, just without the speedup. Issue #119 will add a stricter
-        # watchdog. ``_is_gil_enabled`` exists on 3.13+; older builds
-        # silently skip the check.
-        is_gil_enabled = getattr(sys, "_is_gil_enabled", None)
-        if is_gil_enabled is not None:
-            if is_gil_enabled():
-                logger.warning(
-                    "GIL is enabled — alignment parallelisation will not "
-                    "actually run in parallel. Check PYTHON_GIL=0 and "
-                    "that you are running a free-threaded Python build "
-                    "(python3.13t).",
-                )
-            else:
-                logger.info("Free-threading active (GIL disabled)")
+        # GIL runtime watchdog (#119): reset dedup state at run start
+        # and probe at "render-start". Phase boundaries below also
+        # probe so we catch a mid-render regression (e.g. a freshly
+        # imported C-extension that flips the GIL back on).
+        reset_run_state()
+        check_gil_state("render-start")
 
         frame_counter = 0
         # Render-phase total mirrors what we will actually write to disk:
@@ -383,6 +373,7 @@ class RenderPipeline:
         if has_prepare_phase:
             num_pairs = len(active) - 1
             workers = min(_resolve_workers(self.config.render_workers), num_pairs)
+            check_gil_state("alignment-phase")
             logger.info(
                 "Stage: alignment (%d pairs) using raw frames, workers=%d",
                 num_pairs, workers,
@@ -476,50 +467,142 @@ class RenderPipeline:
         prev_stretched: np.ndarray | None = None
         dims_logged = False
 
-        for i in range(len(active)):
-            idx = self.frames.index(active[i])
-            logger.info("Processing frame %d/%d", i + 1, len(active))
-            t0 = time.monotonic()
+        # Parallel stretch with bounded prefetch (#118): the heavy CPU
+        # work (load_frame -> debayer -> apply_stretch) runs in worker
+        # threads, but the orchestrator main loop still consumes results
+        # in input order so transitions and PNG writes stay sequential.
+        #
+        # Memory bound: at most ``PREFETCH + 1`` debayered frames live
+        # at once, regardless of how long ``active`` is. With workers=4
+        # and PREFETCH=8 that is ~9 * 78 MB = ~700 MB peak — predictable
+        # and independent of frame count.
+        #
+        # The probe (frame 0, already stretched above for dimension
+        # detection) is seeded into the queue as a pre-completed future
+        # so we don't redo that work; subsequent frames are submitted to
+        # the pool. Worker exceptions surface from ``.result()`` and
+        # propagate cleanly out of the ``with`` block.
+        stretch_workers = _resolve_workers(self.config.render_workers)
+        stretch_workers = min(stretch_workers, max(1, len(active)))
+        prefetch = stretch_workers * 2
+        check_gil_state("stretch-phase")
+        logger.info(
+            "Stage: stretch (%d frames) workers=%d prefetch=%d",
+            len(active), stretch_workers, prefetch,
+        )
 
-            # Re-use probed first frame instead of stretching again
-            current_stretched = probe if i == 0 else self.stretch_frame(idx)
+        in_flight: dict[int, Future[np.ndarray]] = {}
 
-            elapsed = time.monotonic() - t0
-            logger.debug("Frame %d/%d stretched in %.2fs", i + 1, len(active), elapsed)
+        # Seed slot 0 with the probe (already computed). Wrap in a
+        # pre-completed Future so the consumer code below is uniform.
+        probe_future: Future[np.ndarray] = Future()
+        probe_future.set_result(probe)
+        in_flight[0] = probe_future
 
-            # Resize if needed
-            if resize_scale != 1.0 and target[0] and target[1]:
-                current_stretched = _resize_frame(current_stretched, target[0], target[1])
+        # Parallel transition pool (#124): the per-pair work
+        # (transition generation + 24 PNG writes) used to run serially
+        # in the consumer, dominating wall-clock time at high worker
+        # counts. We submit each pair to its own worker now; filenames
+        # are precomputed per pair so the order ffmpeg sees is stable
+        # regardless of completion order.
+        #
+        # Memory: each worker streams one transition frame at a time
+        # (see :meth:`_process_transition_pair`), so peak per-worker
+        # is ~80 MB instead of ~1.9 GB for a full 24-frame list.
+        trans_workers = min(
+            _resolve_workers(self.config.render_workers),
+            max(1, len(active) - 1),
+        )
+        trans_futures: list[Future[int]] = []
 
-            # Log dimensions once
-            if not dims_logged:
-                h, w = current_stretched.shape[:2]
-                crop_h = h - 2 * my if my else h
-                crop_w = w - 2 * mx if mx else w
-                dims_logged = True
+        with ThreadPoolExecutor(
+            max_workers=stretch_workers,
+            thread_name_prefix="nc-stretch",
+        ) as pool, ThreadPoolExecutor(
+            max_workers=trans_workers,
+            thread_name_prefix="nc-trans",
+        ) as trans_pool:
+            # Prime the queue: submit slots 1..min(prefetch, len-1).
+            # Slot 0 is already seeded above.
+            next_to_submit = 1
+            prime_limit = min(prefetch + 1, len(active))
+            while next_to_submit < prime_limit:
+                idx = self.frames.index(active[next_to_submit])
+                in_flight[next_to_submit] = pool.submit(self.stretch_frame, idx)
+                next_to_submit += 1
 
-            # Write key frame only if no transitions (transitions include start/end)
-            if not has_transitions:
-                write_frame_png(current_stretched, temp, frame_counter)
-                frame_counter += 1
-                render_progress.increment()
+            for i in range(len(active)):
+                logger.info("Processing frame %d/%d", i + 1, len(active))
+                t0 = time.monotonic()
 
-            # Generate transition with previous frame
-            if prev_stretched is not None and i > 0:
-                trans = self._make_transition_pair(
-                    prev_stretched, current_stretched, i - 1, margins,
+                # Block until this slot is ready. Worker exceptions
+                # re-raise here and propagate out of ``with``.
+                current_stretched = in_flight.pop(i).result()
+
+                elapsed = time.monotonic() - t0
+                logger.debug(
+                    "Frame %d/%d stretched in %.2fs (wait time)",
+                    i + 1, len(active), elapsed,
                 )
-                logger.info(
-                    "Transition %d->%d: %d frames", i - 1, i, len(trans),
-                )
-                for tf in trans:
-                    write_frame_png(tf, temp, frame_counter)
+
+                # Top up the queue: submit one new task to keep the pool
+                # full as we consume results. Caps in-flight count at
+                # ``prefetch + 1``.
+                if next_to_submit < len(active):
+                    idx = self.frames.index(active[next_to_submit])
+                    in_flight[next_to_submit] = pool.submit(
+                        self.stretch_frame, idx,
+                    )
+                    next_to_submit += 1
+
+                # Resize if needed
+                if resize_scale != 1.0 and target[0] and target[1]:
+                    current_stretched = _resize_frame(current_stretched, target[0], target[1])
+
+                # Log dimensions once
+                if not dims_logged:
+                    h, w = current_stretched.shape[:2]
+                    crop_h = h - 2 * my if my else h
+                    crop_w = w - 2 * mx if mx else w
+                    dims_logged = True
+
+                # Write key frame only if no transitions (transitions
+                # include start/end frames). The no-transitions path
+                # stays sequential — it's already a single PNG per
+                # outer iteration and not the bottleneck.
+                if not has_transitions:
+                    write_frame_png(current_stretched, temp, frame_counter)
                     frame_counter += 1
                     render_progress.increment()
 
-            prev_stretched = current_stretched
+                # Dispatch transition with previous frame to the
+                # transition pool. Each pair is independent and the
+                # filenames are deterministic so workers can complete
+                # out of order without confusing ffmpeg.
+                if has_transitions and prev_stretched is not None and i > 0:
+                    pair_idx = i - 1
+                    start_frame = pair_idx * self.effective_crossfade_frames
+                    logger.info(
+                        "Dispatching transition %d->%d to worker (start frame %d)",
+                        pair_idx, i, start_frame,
+                    )
+                    trans_futures.append(trans_pool.submit(
+                        self._process_transition_pair,
+                        prev_stretched, current_stretched, pair_idx, margins,
+                        temp, start_frame, render_progress,
+                    ))
 
-        # Write last key frame (transitions don't include the final frame)
+                prev_stretched = current_stretched
+
+            # Drain transition workers before the stretch pool exits.
+            # ``.result()`` re-raises any worker exception so the user
+            # sees a real error instead of silently corrupted output.
+            for fut in trans_futures:
+                frame_counter += fut.result()
+
+        # Write last key frame (transitions don't include the final frame).
+        # When transitions exist, all pair writes have completed above,
+        # so the final key frame's index is deterministic.
         if has_transitions and prev_stretched is not None:
             if is_pan:
                 h, w = prev_stretched.shape[:2]
@@ -528,8 +611,11 @@ class RenderPipeline:
                 last = prev_stretched[my:my + crop_h, mx:mx + crop_w]
             else:
                 last = prev_stretched
-            write_frame_png(last, temp, frame_counter)
-            frame_counter += 1
+            # Position after all transition frames: pairs contribute
+            # exactly ``effective_crossfade_frames`` each.
+            final_idx = (len(active) - 1) * self.effective_crossfade_frames
+            write_frame_png(last, temp, final_idx)
+            frame_counter = max(frame_counter, final_idx + 1)
             render_progress.increment()
 
         # Release reference
@@ -547,8 +633,14 @@ class RenderPipeline:
         frame_b: np.ndarray,
         pair_index: int,
         margins: tuple[int, int],
-    ) -> list[np.ndarray]:
+    ) -> Iterator[np.ndarray]:
         """Generate transition frames between two consecutive stretched frames.
+
+        Yields frames one at a time so streaming consumers (see
+        :meth:`_process_transition_pair`, issue #124) can write each
+        frame to disk and free it before the next is generated. Holding
+        an entire 24-frame transition in memory at 8K-RGB would peak at
+        ~1.9 GB; streaming caps it at ~80 MB per worker.
 
         Args:
             frame_a: The previous stretched frame.
@@ -557,15 +649,50 @@ class RenderPipeline:
             margins: (mx, my) pixel margins for linear-pan cropping.
         """
         if self.config.transition == "crossfade":
-            return crossfade(frame_a, frame_b, self.effective_crossfade_frames)
-        if self.config.transition == "linear-pan" and self._alignments:
-            return linear_pan(
+            yield from crossfade(frame_a, frame_b, self.effective_crossfade_frames)
+        elif self.config.transition == "linear-pan" and self._alignments:
+            yield from linear_pan(
                 frame_a, frame_b,
                 self._alignments[pair_index],
                 self.effective_crossfade_frames,
                 margins[0], margins[1],
             )
-        return []
+        # else: no transitions — yield nothing
+
+    def _process_transition_pair(
+        self,
+        prev_stretched: np.ndarray,
+        current_stretched: np.ndarray,
+        pair_idx: int,
+        margins: tuple[int, int],
+        temp: Path,
+        start_frame_number: int,
+        progress: _PhaseProgress,
+    ) -> int:
+        """Worker: generate transition frames for one pair and write them.
+
+        Streams frames from :meth:`_make_transition_pair` directly to
+        disk, so peak memory per worker is one transition frame, not
+        the full list. Filenames are deterministic
+        (``start_frame_number + offset``), so ffmpeg picks them up in
+        the right order regardless of which worker finishes first.
+
+        ``progress.increment()`` runs once per written frame; the
+        counter is thread-safe (#116), so concurrent workers don't
+        race. Worker exceptions propagate through ``.result()`` in the
+        main loop and abort the render.
+
+        Returns:
+            The number of frames written.
+        """
+        count = 0
+        for offset, tf in enumerate(self._make_transition_pair(
+            prev_stretched, current_stretched, pair_idx, margins,
+        )):
+            write_frame_png(tf, temp, start_frame_number + offset)
+            progress.increment()
+            count += 1
+        return count
 
     def _get_temp_dir(self) -> Path:
         """Get or create the temporary frame directory."""

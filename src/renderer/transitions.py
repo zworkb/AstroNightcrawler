@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import numpy as np
 from scipy.ndimage import shift as ndimage_shift
 
@@ -12,18 +14,23 @@ def crossfade(
     frame_a: np.ndarray,
     frame_b: np.ndarray,
     num_frames: int = 6,
-) -> list[np.ndarray]:
+) -> Iterator[np.ndarray]:
     """Generate crossfade transition frames between two images.
+
+    Yields frames one at a time (generator) so callers that stream them
+    to disk don't need to hold all ``num_frames`` arrays in memory at
+    once. For a 24-frame, 8K-RGB transition that's the difference
+    between ~80 MB peak (one frame) and ~1.9 GB (full list). See
+    issue #124.
 
     Args:
         frame_a: Starting frame (8-bit).
         frame_b: Ending frame (8-bit).
         num_frames: Number of intermediate frames.
 
-    Returns:
-        List of blended frames.
+    Yields:
+        Blended frames, in order from mostly-A to mostly-B.
     """
-    frames: list[np.ndarray] = []
     for i in range(num_frames):
         # alpha goes from 0.0 (=frame_a) to 1.0 (=frame_b), inclusive
         alpha = i / max(num_frames - 1, 1)
@@ -31,8 +38,7 @@ def crossfade(
             (1 - alpha) * frame_a.astype(np.float32)
             + alpha * frame_b.astype(np.float32)
         )
-        frames.append(blended.astype(np.uint8))
-    return frames
+        yield blended.astype(np.uint8)
 
 
 def linear_pan(
@@ -44,11 +50,15 @@ def linear_pan(
     margin_y: int = 0,
     start_x: float | None = None,
     start_y: float | None = None,
-) -> list[np.ndarray]:
+) -> Iterator[np.ndarray]:
     """Generate linear pan transition with sub-pixel shifting.
 
     The crop window slides from frame_a's position to frame_b's
     position over num_frames intermediate frames.
+
+    Yields frames one at a time (generator) so streaming consumers can
+    write each frame to disk and free it before the next is generated;
+    see :func:`crossfade` for the memory rationale (issue #124).
 
     Args:
         frame_a: Starting frame (8-bit RGB).
@@ -62,8 +72,9 @@ def linear_pan(
         start_y: Vertical starting offset of the crop window within
             frame_a. Defaults to margin_y when None.
 
-    Returns:
-        List of cropped, shifted frames.
+    Yields:
+        Cropped, shifted frames, in order from frame_a's position to
+        frame_b's position.
     """
     import logging
 
@@ -76,7 +87,6 @@ def linear_pan(
     crop_w -= crop_w % 2
     base_x = float(margin_x) if start_x is None else start_x
     base_y = float(margin_y) if start_y is None else start_y
-    frames: list[np.ndarray] = []
 
     for i in range(num_frames):
         # t goes from 0.0 (=frame_a) to 1.0 (=frame_b), inclusive
@@ -124,6 +134,4 @@ def linear_pan(
                 shift_vec.append(0)
             cropped = ndimage_shift(cropped, shift_vec, order=1)
 
-        frames.append(cropped.astype(np.uint8))
-
-    return frames
+        yield cropped.astype(np.uint8)
