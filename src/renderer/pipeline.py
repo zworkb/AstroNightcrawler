@@ -99,6 +99,20 @@ class RenderPipeline:
                 f.skipped = True
                 return
 
+    def debayered_frame(self, frame_idx: int) -> np.ndarray:
+        """Load and debayer a frame without stretching — for analysis.
+
+        Args:
+            frame_idx: Index into self.frames list.
+
+        Returns:
+            Debayered numpy array (raw dtype, e.g. uint16).
+        """
+        frame = self.frames[frame_idx]
+        data = load_frame(frame)
+        pattern = detect_bayer(frame.bayer_pattern, self.config.debayer_mode)
+        return debayer_frame(data, pattern)
+
     def stretch_frame(self, frame_idx: int) -> np.ndarray:
         """Load, debayer, and stretch a single frame.
 

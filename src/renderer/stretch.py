@@ -20,6 +20,75 @@ class StretchParams:
     midtone: float = 0.5
 
 
+def derive_manual_params_from_auto(data: np.ndarray) -> StretchParams:
+    """Compute manual params that approximate the auto_stretch result on this data.
+
+    Black/white come from ZScale (averaged across channels for color data).
+    Midtone approximates the default AsinhStretch curve.
+
+    Args:
+        data: Input array (uint16, float, any shape).
+
+    Returns:
+        StretchParams configured to roughly reproduce the auto stretch.
+    """
+    interval = ZScaleInterval()
+    fdata = data.astype(np.float64)
+    dmax = np.iinfo(data.dtype).max if np.issubdtype(data.dtype, np.integer) else 1.0
+
+    if fdata.ndim == 3:
+        vmins = []
+        vmaxs = []
+        for ch in range(fdata.shape[2]):
+            vmin_ch, vmax_ch = interval.get_limits(fdata[:, :, ch])
+            vmins.append(vmin_ch)
+            vmaxs.append(vmax_ch)
+        vmin = float(np.mean(vmins))
+        vmax = float(np.mean(vmaxs))
+    else:
+        vmin, vmax = interval.get_limits(fdata)
+        vmin = float(vmin)
+        vmax = float(vmax)
+
+    black = float(np.clip(vmin / dmax, 0.0, 1.0))
+    white = float(np.clip(vmax / dmax, 0.0, 1.0))
+    # Default AsinhStretch (a=0.1) maps 0.5 -> ~0.771; solving 0.5^gamma=0.771
+    # gives gamma ~ 0.375, i.e. midtone = 1/gamma - 0.01 ~ 2.65.
+    midtone = 2.65
+    return StretchParams(black=black, white=white, midtone=midtone)
+
+
+def derive_manual_params_from_histogram(
+    data: np.ndarray,
+    low: float = 0.001,
+    high: float = 0.999,
+) -> StretchParams:
+    """Compute manual params that approximate histogram_stretch on this data.
+
+    Black/white come from percentile cutoffs (matching histogram_stretch).
+    Midtone is linear (gamma ~ 1.0).
+
+    Args:
+        data: Input array (uint16, float, any shape).
+        low: Lower percentile cutoff (0..1), matching histogram_stretch.
+        high: Upper percentile cutoff (0..1), matching histogram_stretch.
+
+    Returns:
+        StretchParams configured to roughly reproduce the histogram stretch.
+    """
+    fdata = data.astype(np.float64)
+    dmax = np.iinfo(data.dtype).max if np.issubdtype(data.dtype, np.integer) else 1.0
+
+    vmin = float(np.percentile(fdata, low * 100))
+    vmax = float(np.percentile(fdata, high * 100))
+
+    black = float(np.clip(vmin / dmax, 0.0, 1.0))
+    white = float(np.clip(vmax / dmax, 0.0, 1.0))
+    # Linear stretch: gamma = 1/(midtone+0.01) = 1.0 when midtone = 0.99.
+    midtone = 0.99
+    return StretchParams(black=black, white=white, midtone=midtone)
+
+
 def auto_stretch(data: np.ndarray) -> np.ndarray:
     """Apply ZScale + AsinhStretch and return 8-bit result.
 

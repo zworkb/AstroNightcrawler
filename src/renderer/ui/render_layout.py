@@ -12,7 +12,11 @@ from PIL import Image
 
 from src.config import settings
 from src.renderer.pipeline import RenderConfig, RenderPipeline
-from src.renderer.stretch import StretchParams
+from src.renderer.stretch import (
+    StretchParams,
+    derive_manual_params_from_auto,
+    derive_manual_params_from_histogram,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -97,23 +101,97 @@ def _build_stretch_controls(state: _RenderState) -> None:
     Args:
         state: Mutable render UI state.
     """
+    def _on_slider_change() -> None:
+        # Skip side-effects while we're seeding values from auto-derive,
+        # so a single mode switch doesn't fire 3 redundant refreshes.
+        if state._seeding:
+            return
+        if not state.pipeline:
+            return
+        state.pipeline.config.stretch_mode = state.stretch_mode
+        if state.stretch_mode == "manual":
+            state.pipeline.config.stretch_params = StretchParams(
+                state.black, state.white, state.midtone,
+            )
+        _schedule_preview_refresh(state)
+
+    def _on_mode_change() -> None:
+        if not state.pipeline:
+            return
+        # The bound value (state.stretch_mode) is already the NEW mode;
+        # config.stretch_mode is still the OLD one until we update it.
+        prev_mode = state.pipeline.config.stretch_mode
+        new_mode = state.stretch_mode
+
+        # Seed manual params from the previous mode's stretch result when
+        # transitioning INTO manual. This gives the user a starting point
+        # that reproduces what they were just looking at.
+        if new_mode == "manual" and prev_mode != "manual":
+            try:
+                debayered = state.pipeline.debayered_frame(state.selected_frame)
+                if prev_mode == "histogram":
+                    seeded = derive_manual_params_from_histogram(debayered)
+                elif prev_mode == "auto":
+                    seeded = derive_manual_params_from_auto(debayered)
+                else:
+                    seeded = derive_manual_params_from_auto(debayered)
+                state._seeding = True
+                try:
+                    state.black = seeded.black
+                    state.white = seeded.white
+                    state.midtone = seeded.midtone
+                finally:
+                    state._seeding = False
+            except Exception as exc:
+                logger.warning(
+                    "Could not seed manual params from %s-stretch: %s",
+                    prev_mode, exc,
+                )
+
+        state.pipeline.config.stretch_mode = new_mode
+        if new_mode == "manual":
+            state.pipeline.config.stretch_params = StretchParams(
+                state.black, state.white, state.midtone,
+            )
+        _schedule_preview_refresh(state)
+
     with ui.row().classes("w-full items-center gap-4"):
         ui.select(
             ["auto", "histogram", "manual"], value="histogram",
-            label="Stretch",
+            label="Stretch", on_change=_on_mode_change,
         ).bind_value(state, "stretch_mode")
         ui.slider(
-            min=0.0, max=0.5, step=0.01, value=0.0,
+            min=0.0, max=1.0, step=0.001, value=0.0,
+            on_change=_on_slider_change,
         ).bind_value(state, "black").props("label")
         ui.label("Black")
         ui.slider(
-            min=0.5, max=1.0, step=0.01, value=1.0,
+            min=0.0, max=1.0, step=0.001, value=1.0,
+            on_change=_on_slider_change,
         ).bind_value(state, "white").props("label")
         ui.label("White")
         ui.slider(
-            min=0.1, max=2.0, step=0.1, value=0.5,
+            min=0.1, max=5.0, step=0.05, value=1.0,
+            on_change=_on_slider_change,
         ).bind_value(state, "midtone").props("label")
         ui.label("Midtone")
+
+
+def _schedule_preview_refresh(state: _RenderState) -> None:
+    """Debounced preview refresh — coalesces rapid slider changes."""
+    if state.preview_refresh_timer is not None:
+        try:
+            state.preview_refresh_timer.cancel()
+        except Exception:
+            pass
+
+    def _fire() -> None:
+        state.preview_refresh_timer = None
+        if state.pipeline:
+            import asyncio
+            asyncio.create_task(_show_preview(state, state.selected_frame))
+
+    state.preview_refresh_timer = ui.timer(0.15, _fire, once=True)
 
 
 def _build_output_settings(state: _RenderState) -> None:
@@ -194,7 +272,7 @@ class _RenderState:
         self.stretch_mode: str = "histogram"
         self.black: float = 0.0
         self.white: float = 1.0
-        self.midtone: float = 0.5
+        self.midtone: float = 1.0
         self.transition: str = "linear-pan"
         self.fps: int = settings.render_fps
         self.crf: int = settings.render_crf
@@ -211,6 +289,11 @@ class _RenderState:
         self.status_label: ui.label | None = None
         self.selected_frame: int = 0
         self.loading: bool = False
+        self.preview_refresh_timer: ui.timer | None = None
+        # Re-entry guard: when we seed black/white/midtone from auto-derive,
+        # the bound sliders fire on_change. We skip those handlers to avoid
+        # 3 redundant pipeline updates and refresh-schedules per mode switch.
+        self._seeding: bool = False
 
 
 async def _load(state: _RenderState) -> None:
