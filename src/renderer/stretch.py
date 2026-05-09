@@ -89,6 +89,51 @@ def derive_manual_params_from_histogram(
     return StretchParams(black=black, white=white, midtone=midtone)
 
 
+def compute_histogram(
+    data: np.ndarray, bins: int = 256,
+) -> dict[str, np.ndarray]:
+    """Compute normalized histogram(s) for stretch widget display.
+
+    Pixel values are normalized to ``[0, 1]`` by dividing by the maximum
+    representable value of the input dtype (matching ``manual_stretch``),
+    so the histogram x-axis aligns directly with the black/white handles.
+
+    For 3-channel arrays a separate histogram per channel is returned
+    (shape ``(bins, 3)``); for mono input shape is ``(bins,)``.
+
+    Args:
+        data: Input array (uint16, float, any shape).
+        bins: Number of histogram bins.
+
+    Returns:
+        Dict with keys:
+            - ``edges``: ``(bins+1,)`` float, bin edges in ``[0, 1]``.
+            - ``counts``: raw counts, shape ``(bins,)`` or ``(bins, 3)``.
+            - ``log_counts``: ``log10(counts + 1)``, same shape as counts.
+    """
+    fdata = data.astype(np.float64)
+    if np.issubdtype(data.dtype, np.integer):
+        dmax = float(np.iinfo(data.dtype).max)
+    else:
+        dmax = 1.0
+    normed = fdata / dmax
+
+    edges = np.linspace(0.0, 1.0, bins + 1, dtype=np.float64)
+
+    if normed.ndim == 3 and normed.shape[2] == 3:
+        counts = np.empty((bins, 3), dtype=np.int64)
+        for ch in range(3):
+            ch_counts, _ = np.histogram(normed[:, :, ch], bins=edges)
+            counts[:, ch] = ch_counts
+    else:
+        flat = normed.ravel()
+        counts_1d, _ = np.histogram(flat, bins=edges)
+        counts = counts_1d.astype(np.int64)
+
+    log_counts = np.log10(counts.astype(np.float64) + 1.0)
+    return {"edges": edges, "counts": counts, "log_counts": log_counts}
+
+
 def auto_stretch(data: np.ndarray) -> np.ndarray:
     """Apply ZScale + AsinhStretch and return 8-bit result.
 
