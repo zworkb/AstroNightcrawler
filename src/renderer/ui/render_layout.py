@@ -1169,6 +1169,11 @@ def _build_output_settings(state: _RenderState) -> None:
             def _on_select(path: Path) -> None:
                 current_name = Path(state.output_path).name or "output.mp4"
                 state.output_path = str(path / current_name)
+                # Persist immediately on output-browse selection. The
+                # capture-dir browse path persists indirectly via the
+                # auto-triggered Load; the output browse has no Load
+                # equivalent, so the save needs to happen here.
+                _save_render_state(state)
 
             start = Path(state.output_path).parent
             if not start.exists():
