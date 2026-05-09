@@ -65,7 +65,10 @@ def list_directory(path: Path) -> list[DirectoryEntry]:
                     name=item.name, path=item, is_dir=False,
                     size=item.stat().st_size,
                 ))
-        except PermissionError:
+        except OSError:
+            # Broken symlinks (FileNotFoundError), permission denied,
+            # mount points that disappeared, etc. — silently skip
+            # rather than crash the whole listing.
             continue
 
     return entries + dirs + files
