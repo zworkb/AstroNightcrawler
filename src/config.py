@@ -1,5 +1,6 @@
 """Application configuration via environment variables."""
 
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -39,6 +40,14 @@ class Settings(BaseSettings):
     render_align_sigma: float = 2.0  # star detection sigma for alignment
     render_resolution: str = "native"  # native, 4k, 1440p, 1080p, 720p
     render_speed: float = 1.0  # playback speed multiplier (1=normal, 2=2x faster)
+    render_workers: int = Field(
+        default=4,
+        description=(
+            "Number of parallel workers for alignment + stretch. "
+            "-1 = all available CPU cores. Memory rule of thumb: "
+            "~50 MB/worker for alignment, ~78 MB/worker for stretch."
+        ),
+    )
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
     model_config = {"env_prefix": "NC_", "env_file": ".env"}

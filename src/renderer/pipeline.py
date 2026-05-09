@@ -126,6 +126,14 @@ class RenderConfig:
     # frames and gives WYSIWYG (preview matches render). See issue #114.
     auto_stretch_freeze: bool = True
     auto_stretch_params: AutoStretchParams | None = None
+    # Parallel worker count for alignment (and, in #118, stretch). The
+    # default comes from ``settings.render_workers`` so the env var
+    # ``NC_RENDER_WORKERS`` continues to work transparently. The UI,
+    # CLI flags, and direct ``RenderConfig`` overrides all win over
+    # the settings value at config-build time. ``-1`` means "use all
+    # available CPU cores"; positive ints are clamped to >= 1 by
+    # ``_resolve_workers``. See issue #120.
+    render_workers: int = field(default_factory=lambda: settings.render_workers)
 
 
 class RenderPipeline:
@@ -374,7 +382,7 @@ class RenderPipeline:
         )
         if has_prepare_phase:
             num_pairs = len(active) - 1
-            workers = min(_alignment_workers(), num_pairs)
+            workers = min(_resolve_workers(self.config.render_workers), num_pairs)
             logger.info(
                 "Stage: alignment (%d pairs) using raw frames, workers=%d",
                 num_pairs, workers,
@@ -611,35 +619,27 @@ def _load_mono_raw(frame: FrameInfo) -> np.ndarray:
     return data
 
 
-def _alignment_workers() -> int:
-    """Resolve the alignment worker pool size.
+def _resolve_workers(value: int) -> int:
+    """Resolve a worker-count config value into an actual pool size.
 
-    Defaults to ``min(os.cpu_count(), 4)``. The cap of 4 reflects memory
-    headroom: each pair holds two raw frames simultaneously (~50 MB at
-    4168x6224 uint16), so 4 workers x 2 frames ≈ 400 MB peak just for
-    alignment input — comfortable on a typical laptop, painful past that.
+    The UI / CLI / env / settings layers all feed an integer into
+    ``RenderConfig.render_workers``. This helper interprets that value:
 
-    Override via ``NC_RENDER_WORKERS=<n>``:
-      - positive int: use exactly that many workers
-      - ``-1``: use all available cores (``os.cpu_count()``)
+    - ``-1`` means "use all available CPU cores" (``os.cpu_count()``).
+    - Positive ints are clamped to ``>= 1``.
+    - ``0`` and other non-positive values fall back to ``1`` (a single
+      worker — never disable parallelism silently in a way that
+      degrades into "no work happens").
 
-    Issue #120 will replace this helper with a richer config knob; the
-    env var stays as the escape hatch.
+    The env-var passthrough that the old ``_alignment_workers`` helper
+    implemented now lives in ``Settings.render_workers``: pydantic_settings
+    reads ``NC_RENDER_WORKERS`` from the environment / ``.env`` and
+    populates the field automatically. So the env var still works,
+    but the resolution logic is centralised here. See issue #120.
     """
-    cpu = os.cpu_count() or 1
-    env = os.environ.get("NC_RENDER_WORKERS")
-    if env:
-        try:
-            n = int(env)
-        except ValueError:
-            logger.warning(
-                "Ignoring invalid NC_RENDER_WORKERS=%r (expected int)", env,
-            )
-        else:
-            if n == -1:
-                return cpu
-            return max(1, n)
-    return min(cpu, 4)
+    if value == -1:
+        return os.cpu_count() or 1
+    return max(1, value)
 
 
 def _align_one_pair(

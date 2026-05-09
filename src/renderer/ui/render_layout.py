@@ -1205,6 +1205,14 @@ def _build_output_settings(state: _RenderState) -> None:
         ).bind_value(state, "align_sigma").tooltip(
             "Star detection sensitivity (lower=more)",
         )
+        ui.number(
+            label="Workers", value=state.render_workers,
+            min=-1, max=64, step=1,
+        ).bind_value(state, "render_workers").tooltip(
+            "Parallel workers for alignment + stretch. "
+            "-1 = all CPU cores. Default 4 (balance of speed vs. memory; "
+            "~50 MB/worker for alignment, ~78 MB/worker for stretch).",
+        )
 
 
 # Names of _RenderState attributes that survive across sessions via
@@ -1225,6 +1233,7 @@ _PERSISTED_FIELDS: tuple[str, ...] = (
     "resolution",
     "align_max_dim",
     "align_sigma",
+    "render_workers",
 )
 
 
@@ -1263,6 +1272,15 @@ class _RenderState:
         )
         self.align_sigma: float = stored.get(
             "align_sigma", settings.render_align_sigma,
+        )
+        # Worker count for alignment + stretch (issue #120). -1 means
+        # all CPU cores; default 4 is a memory-safe baseline. The
+        # source priority is GUI (this field) > CLI > env > settings;
+        # ``settings.render_workers`` already absorbs the env var via
+        # pydantic_settings, so picking it as the fallback here gives
+        # us "env wins over default" for free on first launch.
+        self.render_workers: int = stored.get(
+            "render_workers", settings.render_workers,
         )
         self.resolution: str = stored.get("resolution", "720p")
         self.output_path: str = stored.get("output_path", "output.mp4")
@@ -1704,6 +1722,7 @@ def _build_render_config(state: _RenderState) -> RenderConfig:
         speed=float(state.speed),
         auto_stretch_freeze=state.auto_stretch_freeze,
         auto_stretch_params=state.auto_stretch_params,
+        render_workers=int(state.render_workers),
     )
 
 

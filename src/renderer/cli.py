@@ -58,6 +58,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=settings.render_resolution,
         help="Output video resolution preset",
     )
+    p.add_argument(
+        "--workers", "--render-workers", dest="render_workers",
+        type=int, default=None,
+        help=(
+            "Parallel workers for alignment + stretch. -1 = all CPU cores. "
+            "Overrides NC_RENDER_WORKERS env var and settings default. "
+            "GUI value (when running --ui) still wins over this flag."
+        ),
+    )
     p.add_argument("--keep-frames", action="store_true", help="Keep intermediate PNGs")
     p.add_argument("--temp-dir", type=Path, default=None, help="Custom temp directory")
     p.add_argument("--ui", action="store_true", help="Start web UI instead of CLI render")
@@ -93,6 +102,16 @@ def _build_config(args: argparse.Namespace) -> RenderConfig:
             black=args.black, white=args.white, midtone=args.midtone,
         )
 
+    # Source priority for render_workers:
+    #   GUI > CLI flag > NC_RENDER_WORKERS env > settings default(4)
+    # The CLI flag is None when not passed, in which case we fall back
+    # to settings.render_workers (which already reflects the env var
+    # through pydantic_settings). When the CLI is explicit, it overrides.
+    workers = (
+        args.render_workers
+        if args.render_workers is not None
+        else settings.render_workers
+    )
     return RenderConfig(
         fps=args.fps,
         crf=args.crf,
@@ -105,6 +124,7 @@ def _build_config(args: argparse.Namespace) -> RenderConfig:
         speed=args.speed,
         keep_frames=args.keep_frames,
         temp_dir=args.temp_dir,
+        render_workers=workers,
     )
 
 

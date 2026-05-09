@@ -73,6 +73,30 @@ All settings via environment variables or `.env` file (created automatically fro
 | `NC_RENDER_TRANSITION` | `crossfade` | Transition type: none, crossfade, linear-pan |
 | `NC_RENDER_CROSSFADE_FRAMES` | `24` | Interpolated frames per transition |
 | `NC_RENDER_RESOLUTION` | `native` | Output resolution: native, 4k, 1440p, 1080p, 720p |
+| `NC_RENDER_WORKERS` | `4` | Parallel workers for alignment + stretch. `-1` = all CPU cores. Overridden by GUI / `--workers` CLI flag. |
+
+### Render parallelism
+
+Alignment (and, with #118, stretching) runs in a thread pool. The worker
+count is configurable from four places, in priority order: the **Workers**
+field in the render UI's *Advanced Settings* > the `--workers N` (alias
+`--render-workers`) CLI flag > the `NC_RENDER_WORKERS` env var > the
+default of `4`. Use `-1` to use every available CPU core. Memory rule of
+thumb: ~50 MB/worker during alignment and ~78 MB/worker during stretch
+(at 4168x6224 uint16); the default of 4 is a comfortable laptop baseline.
+
+## Sky Path Cinematography
+
+This project pursues a niche we call **Sky Path Cinematography** (project
+nickname: *Nightcrawling*) — drawing a continuous spline on a real star map,
+having a motorized telescope walk it point by point, and assembling the
+captured frames into a star-aligned pan video. As of 2026 a web survey found
+no other tool that implements this full chain: existing mosaic planners
+(EKOS, N.I.N.A., SharpCap, ASIAIR) stitch tiles to a still image, and
+existing pan-video tools (Aladin Tour Navigator, WorldWide Telescope,
+Stellarium scripting) move through synthetic survey data, not your own
+captures. See [docs/related-work.md](docs/related-work.md) for the full
+comparison and prior art.
 
 ## Architecture
 
@@ -128,6 +152,7 @@ make mypy            # Type checking
 
 ## Documentation
 
+- [Sky Path Cinematography — Genre & Prior Art](docs/related-work.md)
 - [Design Specification](docs/superpowers/specs/2026-03-22-nightcrawler-design.md)
 - [Async INDI Client](docs/async-indi-client.md)
 - [Architecture (UML)](docs/architecture.md)
