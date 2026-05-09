@@ -7,7 +7,7 @@ import io
 import logging
 from pathlib import Path
 
-from nicegui import ui
+from nicegui import app, ui
 from PIL import Image
 
 from src.config import settings
@@ -1202,25 +1202,65 @@ def _build_output_settings(state: _RenderState) -> None:
         )
 
 
+# Names of _RenderState attributes that survive across sessions via
+# app.storage.general["render"]. Manual stretch handles (black/white/
+# midtone) are intentionally excluded — they're per-image tuning,
+# overwritten on every mode switch by the auto-seeding logic. The
+# auto-stretch reference anchors are also excluded (per-reference-frame,
+# don't generalise). See issue #122 for the full reasoning.
+_PERSISTED_FIELDS: tuple[str, ...] = (
+    "input_dir",
+    "output_path",
+    "fps",
+    "crf",
+    "speed",
+    "crossfade_frames",
+    "stretch_mode",
+    "transition",
+    "resolution",
+    "align_max_dim",
+    "align_sigma",
+)
+
+
+def _load_render_state() -> dict:
+    """Return the persisted render-UI dict (empty if no prior session)."""
+    return app.storage.general.get("render", {})
+
+
+def _save_render_state(state: _RenderState) -> None:
+    """Snapshot persistable _RenderState fields into app.storage.general."""
+    app.storage.general["render"] = {
+        k: getattr(state, k) for k in _PERSISTED_FIELDS
+    }
+
+
 class _RenderState:
     """Mutable state for the render UI."""
 
     def __init__(self) -> None:
         """Initialize default render state."""
-        self.input_dir: str = "./output/"
-        self.stretch_mode: str = "histogram"
+        stored = _load_render_state()
+        self.input_dir: str = stored.get("input_dir", "./output/")
+        self.stretch_mode: str = stored.get("stretch_mode", "histogram")
         self.black: float = 0.0
         self.white: float = 1.0
         self.midtone: float = 1.0
-        self.transition: str = "linear-pan"
-        self.fps: int = settings.render_fps
-        self.crf: int = settings.render_crf
-        self.speed: float = settings.render_speed
-        self.crossfade_frames: int = settings.render_crossfade_frames
-        self.align_max_dim: int = settings.render_align_max_dim
-        self.align_sigma: float = settings.render_align_sigma
-        self.resolution: str = "720p"
-        self.output_path: str = "output.mp4"
+        self.transition: str = stored.get("transition", "linear-pan")
+        self.fps: int = stored.get("fps", settings.render_fps)
+        self.crf: int = stored.get("crf", settings.render_crf)
+        self.speed: float = stored.get("speed", settings.render_speed)
+        self.crossfade_frames: int = stored.get(
+            "crossfade_frames", settings.render_crossfade_frames,
+        )
+        self.align_max_dim: int = stored.get(
+            "align_max_dim", settings.render_align_max_dim,
+        )
+        self.align_sigma: float = stored.get(
+            "align_sigma", settings.render_align_sigma,
+        )
+        self.resolution: str = stored.get("resolution", "720p")
+        self.output_path: str = stored.get("output_path", "output.mp4")
         self.pipeline: RenderPipeline | None = None
         self.preview: ui.image | None = None
         self.filmstrip: ui.row | None = None
@@ -1284,6 +1324,10 @@ async def _load(state: _RenderState) -> None:
     if state.loading:
         ui.notify("Load already in progress", type="warning")
         return
+    # Persist current UI state on Load too (not just Render): committing to
+    # a capture directory is the natural moment to remember it for next
+    # time, even if the user never proceeds to render.
+    _save_render_state(state)
     state.loading = True
     try:
         capture_dir = Path(state.input_dir)
@@ -1541,6 +1585,7 @@ async def _render(state: _RenderState) -> None:
     Args:
         state: Mutable render UI state.
     """
+    _save_render_state(state)
     if not state.pipeline:
         ui.notify("Load a capture directory first", type="warning")
         return
