@@ -167,6 +167,9 @@ class RenderPipeline:
         # Populated by :meth:`load`. Holds the parsed manifest including
         # labels (#130). ``None`` before ``load`` is called.
         self.project: Project | None = None
+        # Populated by ``_render_to_dir`` once we know ``resize_scale``;
+        # read by transition workers. Empty until then.
+        self._scaled_labels: list[Label] = []
 
     def load(self) -> None:
         """Load manifest and frame metadata."""
@@ -505,11 +508,35 @@ class RenderPipeline:
         # Labels to burn into every frame (#130). Empty when either the
         # config flag is off or the manifest has no labels — keeps the
         # per-frame fast path zero-cost in that common case.
-        labels: list[Label] = (
+        #
+        # Labels are persisted in *original* frame-pixel space (so that
+        # editing them is resolution-independent). The render output may
+        # be resized via ``resize_scale``; we need labels scaled to match
+        # the resized frames so the draw call's bounds-check actually
+        # accepts them. ``self._alignments`` is already pre-scaled at
+        # this point (see "Scaled alignment offsets" above), so offsets
+        # are already in resized space.
+        #
+        # We stash the scaled list on ``self`` so the transition workers
+        # (``_process_transition_pair`` runs in a thread pool) read the
+        # same scaled labels without reaching into self.project.labels
+        # directly.
+        raw_labels: list[Label] = (
             self.project.labels
             if (self.project and self.config.render_labels)
             else []
         )
+        if raw_labels and resize_scale != 1.0:
+            self._scaled_labels = [
+                lbl.model_copy(update={
+                    "x": lbl.x * resize_scale,
+                    "y": lbl.y * resize_scale,
+                })
+                for lbl in raw_labels
+            ]
+        else:
+            self._scaled_labels = list(raw_labels)
+        labels = self._scaled_labels
 
         prev_stretched: np.ndarray | None = None
         dims_logged = False
@@ -750,9 +777,11 @@ class RenderPipeline:
         Returns:
             The number of frames written.
         """
+        # Read scaled labels prepared by ``_render_to_dir`` (resize_scale
+        # already applied so positions land inside the resized frame).
         labels: list[Label] = (
-            self.project.labels
-            if (self.project and self.config.render_labels)
+            list(self._scaled_labels)
+            if self.config.render_labels
             else []
         )
         n = self.effective_crossfade_frames

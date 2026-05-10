@@ -1914,10 +1914,41 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
         try:
             stretched = state.pipeline.stretch_frame(frame_idx)
             img = Image.fromarray(stretched)
+            orig_w, orig_h = img.size
             # The preview <img> is constrained to max-h-96 (~384 px);
             # 1280 px gives plenty of headroom for zoom/expand without
             # blowing past the WebSocket message size limit.
             img.thumbnail((1280, 1280))
+            thumb_w, thumb_h = img.size
+
+            # Burn in the labels whose reference frame is this frame.
+            # In the preview we deliberately don't use the alignment
+            # chain — when no render has run yet ``_alignments`` is
+            # empty and ``cumulative_offset`` falls back to (0, 0),
+            # which would draw every label at its stored pixel for
+            # every frame. That's misleading. Showing only labels
+            # anchored on the displayed frame is honest and gives the
+            # user instant visual feedback right after a click.
+            if state.pipeline.project:
+                preview_scale = thumb_w / orig_w if orig_w else 1.0
+                from src.renderer.labels import _draw_labels  # local import to avoid cycle at module load
+                here = [
+                    lbl.model_copy(update={
+                        "x": lbl.x * preview_scale,
+                        "y": lbl.y * preview_scale,
+                    })
+                    for lbl in state.pipeline.project.labels
+                    if lbl.ref_frame_index == frame_idx
+                ]
+                if here:
+                    import numpy as np
+                    arr = np.asarray(img)
+                    arr = _draw_labels(
+                        arr, here, [(0.0, 0.0)] * len(here),
+                        (thumb_w, thumb_h),
+                    )
+                    img = Image.fromarray(arr)
+
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=85)
             b64 = base64.b64encode(buf.getvalue()).decode()
