@@ -130,6 +130,35 @@ class INDIConfig(BaseModel):
     camera: str = Field(default="", description="INDI camera device name")
 
 
+class Label(BaseModel):
+    """A single annotation drawn into rendered frames.
+
+    Position is stored in the pixel space of one chosen reference frame.
+    Tracking across other frames uses the renderer's alignment chain.
+    """
+
+    id: str = Field(description="UUID4 — stable across edits")
+    text: str = Field(description="Display text")
+
+    ref_frame_index: int = Field(
+        ge=0,
+        description="Which capture frame's pixel space holds (x, y)",
+    )
+    x: float = Field(description="Pixel-x in reference frame; sub-pixel allowed")
+    y: float = Field(description="Pixel-y in reference frame")
+
+    color: str = Field(default="#ffff00", description="CSS hex; text + marker share")
+    font_size: int = Field(default=24, ge=6, le=200)
+    marker: Literal["none", "dot", "cross", "circle"] = Field(default="dot")
+    text_offset_x: int = Field(default=12, description="Text offset from marker in px")
+    text_offset_y: int = Field(default=0)
+
+    source: Literal["manual", "catalog"] = Field(default="manual")
+    catalog_ra: float | None = Field(default=None, description="Original RA in degrees (catalog only)")
+    catalog_dec: float | None = Field(default=None, description="Original Dec in degrees (catalog only)")
+    catalog_id: str | None = Field(default=None, description="Source identifier, e.g. 'M27'")
+
+
 class Project(BaseModel):
     """Top-level project container, serializable to JSON."""
 
@@ -147,3 +176,9 @@ class Project(BaseModel):
         default_factory=list, description="Generated capture points along the path"
     )
     indi: INDIConfig | None = Field(default=None, description="INDI device configuration")
+    labels: list[Label] = Field(default_factory=list)
+    north_angle_deg: float = Field(
+        default=0.0,
+        description="Sky orientation correction in degrees; 0° = north up. "
+                    "Per-project because mount alignment quirks vary by session.",
+    )
