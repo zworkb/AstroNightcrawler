@@ -11,6 +11,7 @@ from nicegui import app, ui
 from PIL import Image
 
 from src.config import settings
+from src.models.project import Label
 from src.renderer.pipeline import ProgressUpdate, RenderConfig, RenderPipeline
 from src.renderer.stretch import (
     AutoStretchParams,
@@ -75,6 +76,7 @@ def create_render_layout() -> None:
         state.filmstrip = ui.row().classes(
             "w-full overflow-x-auto gap-1 py-2",
         )
+        _build_labels_panel(state)
         _build_output_settings(state)
         state.progress = ui.linear_progress(value=0).classes("w-full")
         state.status_label = ui.label("")
@@ -1259,6 +1261,117 @@ def _save_render_state(state: _RenderState) -> None:
     }
 
 
+def _persist_project(state: _RenderState) -> None:
+    """Write the (possibly modified) project back to manifest.json.
+
+    Called after any in-UI mutation of the labels list so the change
+    survives a tab close even before the next render.
+    """
+    if not state.pipeline or not state.pipeline.project:
+        return
+    manifest_path = state.pipeline.capture_dir / "manifest.json"
+    manifest_path.write_text(state.pipeline.project.model_dump_json(indent=2))
+
+
+def _build_labels_panel(state: _RenderState) -> None:
+    """Collapsible Labels list + edit/delete + click-to-add toggle."""
+    with ui.expansion("Labels", icon="label").classes("w-full") as exp:
+        state.labels_panel = exp
+        with ui.column().classes("w-full gap-1"):
+            state.labels_list_container = ui.column().classes("w-full gap-1")
+            with ui.row().classes("w-full justify-end"):
+                ui.button(
+                    "Add label", icon="add",
+                    on_click=lambda: _toggle_click_to_add(state),
+                ).props("dense flat")
+        _refresh_labels_list(state)
+
+
+def _refresh_labels_list(state: _RenderState) -> None:
+    """Re-render the labels list from the current project."""
+    if not state.labels_list_container:
+        return
+    state.labels_list_container.clear()
+    if not state.pipeline or not state.pipeline.project:
+        with state.labels_list_container:
+            ui.label("(load a capture first)").classes("text-grey text-xs")
+        return
+    labels = state.pipeline.project.labels
+    if not labels:
+        with state.labels_list_container:
+            ui.label("(no labels yet)").classes("text-grey text-xs")
+        return
+    with state.labels_list_container:
+        for label in labels:
+            _render_label_row(state, label)
+
+
+def _render_label_row(state: _RenderState, label: Label) -> None:
+    """One row in the labels list."""
+    with ui.row().classes("w-full items-center gap-2"):
+        ui.html(
+            f'<span style="display:inline-block;width:12px;height:12px;'
+            f'background:{label.color};border-radius:50%"></span>',
+        )
+        ui.label(label.text or "(empty)").classes("flex-grow text-sm")
+        ui.label(f"({int(label.x)},{int(label.y)})").classes(
+            "text-xs text-grey",
+        )
+        ui.button(
+            icon="edit",
+            on_click=lambda l=label: _open_edit_popover(state, l),
+        ).props("flat dense")
+        ui.button(
+            icon="delete", color="red",
+            on_click=lambda l=label: _delete_label(state, l),
+        ).props("flat dense")
+
+
+def _delete_label(state: _RenderState, label: Label) -> None:
+    """Remove ``label`` from the project, persist, and refresh the list."""
+    if not state.pipeline or not state.pipeline.project:
+        return
+    state.pipeline.project.labels = [
+        x for x in state.pipeline.project.labels if x.id != label.id
+    ]
+    _persist_project(state)
+    _refresh_labels_list(state)
+
+
+def _open_edit_popover(state: _RenderState, label: Label) -> None:
+    """Open an inline dialog to edit a label's properties."""
+    with ui.dialog() as dialog, ui.card().classes("w-80"):
+        ui.label("Edit label").classes("text-md font-bold")
+        text_in = ui.input("Text", value=label.text)
+        color_in = ui.input("Color (hex)", value=label.color)
+        font_size_in = ui.number(
+            "Font size", value=label.font_size, min=6, max=200,
+        )
+        marker_in = ui.select(
+            ["none", "dot", "cross", "circle"],
+            value=label.marker, label="Marker",
+        )
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+
+            def _save() -> None:
+                label.text = text_in.value or ""
+                label.color = color_in.value or "#ffff00"
+                label.font_size = int(font_size_in.value or 24)
+                label.marker = marker_in.value or "dot"
+                _persist_project(state)
+                _refresh_labels_list(state)
+                dialog.close()
+
+            ui.button("Save", color="primary", on_click=_save)
+    dialog.open()
+
+
+def _toggle_click_to_add(state: _RenderState) -> None:
+    """Stub for now; full click-to-add lands in issue #132."""
+    ui.notify("Click-to-add: coming in next iteration", type="info")
+
+
 class _RenderState:
     """Mutable state for the render UI."""
 
@@ -1349,6 +1462,14 @@ class _RenderState:
         self.auto_stretch_ref_label: ui.label | None = None
         self.auto_stretch_apply_button: ui.button | None = None
         self.auto_stretch_freeze_row: ui.row | None = None
+        # Labels panel (issue #131). ``labels_panel`` is the outer
+        # ``ui.expansion``; ``labels_list_container`` is the inner column
+        # whose children are rebuilt by ``_refresh_labels_list``.
+        # ``click_to_add_active`` is wired up in #132; here it just keeps
+        # the toggle stub a no-op safe.
+        self.labels_panel: ui.expansion | None = None
+        self.labels_list_container: ui.column | None = None
+        self.click_to_add_active: bool = False
 
 
 async def _load(state: _RenderState) -> None:
@@ -1437,6 +1558,7 @@ async def _load(state: _RenderState) -> None:
 
             _set_render_status(state, "", 0)
             await _show_preview(state, 0)
+            _refresh_labels_list(state)
             ui.notify(f"Ready — {n} frames loaded")
         except RuntimeError as exc:
             logger.info("UI gone before load finished: %s", exc)
