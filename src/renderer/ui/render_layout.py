@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import uuid
 from pathlib import Path
 
 from nicegui import app, ui
@@ -72,6 +73,15 @@ def create_render_layout() -> None:
     with ui.column().classes("w-full p-4 gap-4"):
         _build_top_bar(state)
         state.preview = ui.image().classes("w-full max-h-96 object-contain")
+        state.preview.on(
+            "click",
+            lambda e: _handle_preview_click(state, e),
+            args=[
+                "offsetX", "offsetY",
+                "target.naturalWidth", "target.naturalHeight",
+                "target.offsetWidth", "target.offsetHeight",
+            ],
+        )
         _build_stretch_controls(state)
         state.filmstrip = ui.row().classes(
             "w-full overflow-x-auto gap-1 py-2",
@@ -1368,8 +1378,101 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
 
 
 def _toggle_click_to_add(state: _RenderState) -> None:
-    """Stub for now; full click-to-add lands in issue #132."""
-    ui.notify("Click-to-add: coming in next iteration", type="info")
+    """Enter / leave click-to-add mode.
+
+    While active, a click on the preview opens the new-label popover with
+    the click position pre-filled. The preview cursor turns into a
+    crosshair to make the mode visually obvious.
+    """
+    state.click_to_add_active = not state.click_to_add_active
+    if state.click_to_add_active:
+        ui.notify(
+            "Click anywhere on the preview to add a label",
+            type="info", timeout=3000,
+        )
+        if state.preview:
+            state.preview.classes(add="cursor-crosshair")
+    else:
+        if state.preview:
+            state.preview.classes(remove="cursor-crosshair")
+
+
+def _handle_preview_click(state: _RenderState, event) -> None:
+    """If click-to-add is active, treat the click as a label position."""
+    if not state.click_to_add_active:
+        return
+    if not state.pipeline or not state.pipeline.project:
+        return
+    args = event.args or {}
+    css_x = float(args.get("offsetX", 0))
+    css_y = float(args.get("offsetY", 0))
+    nat_w = float(args.get("naturalWidth", 1)) or 1.0
+    nat_h = float(args.get("naturalHeight", 1)) or 1.0
+    disp_w = float(args.get("offsetWidth", nat_w)) or nat_w
+    disp_h = float(args.get("offsetHeight", nat_h)) or nat_h
+    # Map CSS click -> natural-image pixel within the preview JPEG.
+    nat_x = css_x * (nat_w / disp_w)
+    nat_y = css_y * (nat_h / disp_h)
+    # Map natural-pixel (preview is the JPEG downsampled to <=1280 px in
+    # _show_preview) -> original frame pixel, using the original
+    # frame's actual dimensions.
+    frame_idx = state.selected_frame
+    pipeline = state.pipeline
+    debayered = pipeline.debayered_frame(frame_idx)
+    orig_h, orig_w = debayered.shape[:2]
+    preview_scale = min(orig_w / nat_w, orig_h / nat_h)
+    label_x = nat_x * preview_scale
+    label_y = nat_y * preview_scale
+    _open_create_popover(
+        state, ref_frame_index=frame_idx, x=label_x, y=label_y,
+    )
+    # Exit click-to-add after one placement.
+    _toggle_click_to_add(state)
+
+
+def _open_create_popover(
+    state: _RenderState,
+    *,
+    ref_frame_index: int,
+    x: float,
+    y: float,
+) -> None:
+    """Open the same popover used for editing, but for a brand-new label."""
+    new_label = Label(
+        id=str(uuid.uuid4()),
+        text="",
+        ref_frame_index=ref_frame_index,
+        x=x,
+        y=y,
+    )
+    with ui.dialog() as dialog, ui.card().classes("w-80"):
+        ui.label("New label").classes("text-md font-bold")
+        ui.label(
+            f"Position: ({int(x)}, {int(y)}) on frame {ref_frame_index}",
+        ).classes("text-xs text-grey")
+        text_in = ui.input("Text", value="")
+        color_in = ui.input("Color (hex)", value="#ffff00")
+        font_size_in = ui.number("Font size", value=24, min=6, max=200)
+        marker_in = ui.select(
+            ["none", "dot", "cross", "circle"],
+            value="dot", label="Marker",
+        )
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+
+            def _save() -> None:
+                new_label.text = text_in.value or ""
+                new_label.color = color_in.value or "#ffff00"
+                new_label.font_size = int(font_size_in.value or 24)
+                new_label.marker = marker_in.value or "dot"
+                if state.pipeline and state.pipeline.project:
+                    state.pipeline.project.labels.append(new_label)
+                    _persist_project(state)
+                    _refresh_labels_list(state)
+                dialog.close()
+
+            ui.button("Save", color="primary", on_click=_save)
+    dialog.open()
 
 
 class _RenderState:
@@ -1465,8 +1568,9 @@ class _RenderState:
         # Labels panel (issue #131). ``labels_panel`` is the outer
         # ``ui.expansion``; ``labels_list_container`` is the inner column
         # whose children are rebuilt by ``_refresh_labels_list``.
-        # ``click_to_add_active`` is wired up in #132; here it just keeps
-        # the toggle stub a no-op safe.
+        # ``click_to_add_active`` is flipped by ``_toggle_click_to_add``
+        # (#132): while True, a click on the preview opens the new-label
+        # popover with the click position pre-filled.
         self.labels_panel: ui.expansion | None = None
         self.labels_list_container: ui.column | None = None
         self.click_to_add_active: bool = False
