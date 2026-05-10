@@ -73,14 +73,26 @@ def create_render_layout() -> None:
     with ui.column().classes("w-full p-4 gap-4"):
         _build_top_bar(state)
         state.preview = ui.image().classes("w-full max-h-96 object-contain")
+        # NiceGUI 3.x ignores dotted-path args ("target.naturalWidth"), so
+        # we use a js_handler to explicitly bundle everything we need into
+        # one emit() call. Otherwise the natural / displayed dimensions
+        # come through as undefined → 1 in Python, the scale math blows
+        # up, and click positions get mapped to coordinates in the
+        # millions of pixels.
         state.preview.on(
             "click",
             lambda e: _handle_preview_click(state, e),
-            args=[
-                "offsetX", "offsetY",
-                "target.naturalWidth", "target.naturalHeight",
-                "target.offsetWidth", "target.offsetHeight",
-            ],
+            js_handler="""(evt) => {
+                const r = evt.target.getBoundingClientRect();
+                emit({
+                    cssX: evt.offsetX,
+                    cssY: evt.offsetY,
+                    dispW: r.width,
+                    dispH: r.height,
+                    natW: evt.target.naturalWidth,
+                    natH: evt.target.naturalHeight
+                });
+            }""",
         )
         _build_stretch_controls(state)
         state.filmstrip = ui.row().classes(
@@ -1479,31 +1491,44 @@ def _toggle_click_to_add(state: _RenderState) -> None:
 
 
 def _handle_preview_click(state: _RenderState, event) -> None:
-    """If click-to-add is active, treat the click as a label position."""
+    """If click-to-add is active, treat the click as a label position.
+
+    The js_handler in ``create_render_layout`` packs the CSS click,
+    displayed size, and natural size into a single dict, so we never
+    have to worry about NiceGUI's dotted-args quirks.
+    """
     if not state.click_to_add_active:
         return
     if not state.pipeline or not state.pipeline.project:
         return
     args = event.args or {}
-    css_x = float(args.get("offsetX", 0))
-    css_y = float(args.get("offsetY", 0))
-    nat_w = float(args.get("naturalWidth", 1)) or 1.0
-    nat_h = float(args.get("naturalHeight", 1)) or 1.0
-    disp_w = float(args.get("offsetWidth", nat_w)) or nat_w
-    disp_h = float(args.get("offsetHeight", nat_h)) or nat_h
-    # Map CSS click -> natural-image pixel within the preview JPEG.
+    css_x = float(args.get("cssX", 0))
+    css_y = float(args.get("cssY", 0))
+    disp_w = float(args.get("dispW", 0)) or 1.0
+    disp_h = float(args.get("dispH", 0)) or 1.0
+    nat_w = float(args.get("natW", 0)) or 1.0
+    nat_h = float(args.get("natH", 0)) or 1.0
+
+    # CSS click -> natural-pixel in the preview JPEG.
     nat_x = css_x * (nat_w / disp_w)
     nat_y = css_y * (nat_h / disp_h)
-    # Map natural-pixel (preview is the JPEG downsampled to <=1280 px in
-    # _show_preview) -> original frame pixel, using the original
-    # frame's actual dimensions.
+
+    # Natural-pixel -> original frame pixel. The preview JPEG was
+    # downsampled to <=1280 px in _show_preview via PIL.thumbnail, so
+    # the scale ratio is the same on both axes.
     frame_idx = state.selected_frame
-    pipeline = state.pipeline
-    debayered = pipeline.debayered_frame(frame_idx)
+    debayered = state.pipeline.debayered_frame(frame_idx)
     orig_h, orig_w = debayered.shape[:2]
-    preview_scale = min(orig_w / nat_w, orig_h / nat_h)
+    preview_scale = orig_w / nat_w if nat_w else 1.0
     label_x = nat_x * preview_scale
     label_y = nat_y * preview_scale
+
+    # Sanity guard — clamp to frame bounds with a tiny epsilon. If the
+    # JS payload was malformed for any reason, the popover at least
+    # opens at a valid position rather than millions of pixels off.
+    label_x = max(0.0, min(label_x, orig_w - 1))
+    label_y = max(0.0, min(label_y, orig_h - 1))
+
     _open_create_popover(
         state, ref_frame_index=frame_idx, x=label_x, y=label_y,
     )
