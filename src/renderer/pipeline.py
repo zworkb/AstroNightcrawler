@@ -693,9 +693,18 @@ class RenderPipeline:
             else:
                 last = prev_stretched
             if labels:
+                # When ``is_pan``, ``last`` was cropped by (mx, my) on
+                # each side, so the cropped frame's origin sits at
+                # (mx, my) in the uncropped image. Add (mx, my) to the
+                # cumulative offset so labels land in the cropped frame
+                # at the right spot.
+                base_offsets = self._label_offsets(labels, len(active) - 1)
+                if is_pan:
+                    offsets = [(dx + mx, dy + my) for dx, dy in base_offsets]
+                else:
+                    offsets = base_offsets
                 last = _draw_labels(
-                    last, labels,
-                    self._label_offsets(labels, len(active) - 1),
+                    last, labels, offsets,
                     (last.shape[1], last.shape[0]),
                 )
             # Position after all transition frames: pairs contribute
@@ -792,6 +801,12 @@ class RenderPipeline:
         if labels:
             offs_a = self._label_offsets(labels, pair_idx)
             offs_b = self._label_offsets(labels, pair_idx + 1)
+        # Transition frames are produced cropped by (mx, my) on each
+        # side (linear_pan reserves that room for the pan). To map a
+        # label's reference-frame pixel into the cropped output we
+        # need an extra (+mx, +my) on top of the alignment offset.
+        # For crossfade (margins=(0, 0)) this adds nothing.
+        crop_mx, crop_my = margins
         count = 0
         for offset, tf in enumerate(self._make_transition_pair(
             prev_stretched, current_stretched, pair_idx, margins,
@@ -799,7 +814,10 @@ class RenderPipeline:
             if labels:
                 t = (offset + 1) / n
                 interp = [
-                    (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+                    (
+                        a[0] + t * (b[0] - a[0]) + crop_mx,
+                        a[1] + t * (b[1] - a[1]) + crop_my,
+                    )
                     for a, b in zip(offs_a, offs_b, strict=True)
                 ]
                 tf = _draw_labels(
