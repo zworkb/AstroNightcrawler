@@ -48,6 +48,19 @@ class Settings(BaseSettings):
             "~50 MB/worker for alignment, ~78 MB/worker for stretch."
         ),
     )
+    render_linear_pan_blend_tail: int = Field(
+        default=0,
+        description=(
+            "Number of trailing frames in a linear-pan transition over "
+            "which to crossfade from frame_a's pan to frame_b. Smooths "
+            "brightness jumps between keyframes (different exposures of "
+            "the same sky region). 0 = no blending (default, byte-"
+            "identical to pre-#126 behavior). Recommended: 6-8 (~1/4 of "
+            "the crossfade-frame count). Memory cost: one float32 frame_b "
+            "crop per pair (~78 MB at 8K-RGB), one temporary float32 "
+            "blend per blended frame."
+        ),
+    )
     log_level: str = "INFO"  # DEBUG, INFO, WARNING, ERROR
 
     model_config = {"env_prefix": "NC_", "env_file": ".env"}

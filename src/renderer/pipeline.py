@@ -134,6 +134,14 @@ class RenderConfig:
     # available CPU cores"; positive ints are clamped to >= 1 by
     # ``_resolve_workers``. See issue #120.
     render_workers: int = field(default_factory=lambda: settings.render_workers)
+    # Tail-blend frames for ``linear_pan`` transitions (#126). The last
+    # K frames of each pair crossfade from frame_a's pan output to
+    # frame_b's reference crop with smoothstep easing, eliminating the
+    # brightness/exposure jump between keyframes. Default ``0`` = no
+    # blending, identical to pre-#126 renders.
+    linear_pan_blend_tail: int = field(
+        default_factory=lambda: settings.render_linear_pan_blend_tail,
+    )
 
 
 class RenderPipeline:
@@ -656,6 +664,7 @@ class RenderPipeline:
                 self._alignments[pair_index],
                 self.effective_crossfade_frames,
                 margins[0], margins[1],
+                blend_tail_frames=self.config.linear_pan_blend_tail,
             )
         # else: no transitions — yield nothing
 

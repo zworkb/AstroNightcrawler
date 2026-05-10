@@ -70,6 +70,112 @@ class TestLinearPan:
         for f0, ft in zip(frames_zero, frames_tiny):
             np.testing.assert_array_equal(f0, ft)
 
+    def test_zero_blend_tail_byte_identical(self) -> None:
+        """Regression guard: ``blend_tail_frames=0`` (default and explicit)
+        must produce byte-identical output to the pre-#126 path.
+
+        Existing renders are the workhorse case — anyone who hasn't
+        explicitly opted into blending must see exactly the bits they
+        saw before. Tested in both code paths (no-rotation fast path
+        and rotation affine_transform path).
+        """
+        rng = np.random.default_rng(seed=123)
+        a = rng.integers(0, 256, size=(100, 100, 3), dtype=np.uint8)
+        b = rng.integers(0, 256, size=(100, 100, 3), dtype=np.uint8)
+
+        # No-rotation fast path
+        align = AlignmentResult(dx=5.7, dy=3.2, rotation=0.0, success=True)
+        frames_default = list(linear_pan(
+            a, b, align, num_frames=8, margin_x=5, margin_y=5,
+        ))
+        frames_explicit_zero = list(linear_pan(
+            a, b, align, num_frames=8, margin_x=5, margin_y=5,
+            blend_tail_frames=0,
+        ))
+        for f_def, f_zero in zip(
+            frames_default, frames_explicit_zero, strict=True,
+        ):
+            np.testing.assert_array_equal(f_def, f_zero)
+
+        # Rotation path (above the eps threshold)
+        align_rot = AlignmentResult(
+            dx=5.7, dy=3.2, rotation=2.0, success=True,
+        )
+        frames_rot_default = list(linear_pan(
+            a, b, align_rot, num_frames=8, margin_x=5, margin_y=5,
+        ))
+        frames_rot_zero = list(linear_pan(
+            a, b, align_rot, num_frames=8, margin_x=5, margin_y=5,
+            blend_tail_frames=0,
+        ))
+        for f_def, f_zero in zip(
+            frames_rot_default, frames_rot_zero, strict=True,
+        ):
+            np.testing.assert_array_equal(f_def, f_zero)
+
+    def test_tail_blends_to_frame_b(self) -> None:
+        """With uniform-grey frame_a and uniform-white frame_b, the last
+        ``blend_tail_frames`` should ramp monotonically from grey to
+        white via smoothstep easing.
+
+        Geometry is intentionally trivial (identity alignment, uniform
+        colors) so the only thing the test sees is the blend math.
+        """
+        a = np.full((100, 100, 3), 128, dtype=np.uint8)
+        b = np.full((100, 100, 3), 255, dtype=np.uint8)
+        align = AlignmentResult(dx=0.0, dy=0.0, rotation=0.0, success=True)
+
+        num_frames = 10
+        blend_tail_frames = 4
+        frames = list(linear_pan(
+            a, b, align,
+            num_frames=num_frames,
+            margin_x=5, margin_y=5,
+            blend_tail_frames=blend_tail_frames,
+        ))
+        assert len(frames) == num_frames
+
+        means = [float(f.mean()) for f in frames]
+
+        # Pre-blend frames (0 .. num_frames - blend_tail_frames - 1) are
+        # pure pan output of frame_a → still grey.
+        for m in means[:num_frames - blend_tail_frames]:
+            assert abs(m - 128) < 1.0, (
+                f"Pre-blend frame mean should be ~128, got {m}"
+            )
+
+        # Tail frames must monotonically increase toward white.
+        tail_means = means[num_frames - blend_tail_frames:]
+        for prev, curr in zip(tail_means, tail_means[1:], strict=False):
+            assert curr >= prev, (
+                f"Tail brightness should be monotonically non-decreasing, "
+                f"got {tail_means}"
+            )
+
+        # First tail frame: alpha=0 → still pure grey (128).
+        assert abs(tail_means[0] - 128) < 1.0, (
+            f"First tail frame should still be grey (alpha=0), "
+            f"got mean {tail_means[0]}"
+        )
+        # Last frame: alpha=1 → pure white (255).
+        assert tail_means[-1] > 254.0, (
+            f"Last frame should be ~white (alpha=1), got mean {tail_means[-1]}"
+        )
+
+    def test_blend_tail_clamped_when_too_large(self) -> None:
+        """``blend_tail_frames >= num_frames`` clamps to ``num_frames-1``
+        and does not error."""
+        a = np.full((50, 50, 3), 128, dtype=np.uint8)
+        b = np.full((50, 50, 3), 255, dtype=np.uint8)
+        align = AlignmentResult(dx=0.0, dy=0.0, rotation=0.0, success=True)
+        # Should not raise; should produce num_frames frames.
+        frames = list(linear_pan(
+            a, b, align,
+            num_frames=4, margin_x=2, margin_y=2,
+            blend_tail_frames=10,
+        ))
+        assert len(frames) == 4
+
     def test_rotation_interpolates_smoothly(self) -> None:
         """A non-trivial rotation should produce per-frame angular steps.
 

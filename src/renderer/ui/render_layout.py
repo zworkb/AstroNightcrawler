@@ -1213,6 +1213,15 @@ def _build_output_settings(state: _RenderState) -> None:
             "-1 = all CPU cores. Default 4 (balance of speed vs. memory; "
             "~50 MB/worker for alignment, ~78 MB/worker for stretch).",
         )
+        ui.number(
+            label="Blend tail frames", value=state.linear_pan_blend_tail,
+            min=0, max=120, step=1,
+        ).bind_value(state, "linear_pan_blend_tail").tooltip(
+            "Anzahl Frames am Ende der linear-pan-Transition über die "
+            "Frame_a→Frame_b geblendet wird. Glättet Belichtungssprünge "
+            "zwischen Keyframes. 0 = kein Blending. "
+            "Empfohlen: 6-8 (~1/4 der Crossfade-Frames).",
+        )
 
 
 # Names of _RenderState attributes that survive across sessions via
@@ -1234,6 +1243,7 @@ _PERSISTED_FIELDS: tuple[str, ...] = (
     "align_max_dim",
     "align_sigma",
     "render_workers",
+    "linear_pan_blend_tail",
 )
 
 
@@ -1281,6 +1291,11 @@ class _RenderState:
         # us "env wins over default" for free on first launch.
         self.render_workers: int = stored.get(
             "render_workers", settings.render_workers,
+        )
+        # Tail-blend frames for linear_pan transitions (issue #126).
+        # 0 (default) = no blending; pre-#126 byte-identical output.
+        self.linear_pan_blend_tail: int = stored.get(
+            "linear_pan_blend_tail", settings.render_linear_pan_blend_tail,
         )
         self.resolution: str = stored.get("resolution", "720p")
         self.output_path: str = stored.get("output_path", "output.mp4")
@@ -1723,6 +1738,7 @@ def _build_render_config(state: _RenderState) -> RenderConfig:
         auto_stretch_freeze=state.auto_stretch_freeze,
         auto_stretch_params=state.auto_stretch_params,
         render_workers=int(state.render_workers),
+        linear_pan_blend_tail=int(state.linear_pan_blend_tail),
     )
 
 
