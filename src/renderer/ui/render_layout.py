@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import uuid
 from pathlib import Path
 
 from nicegui import app, ui
@@ -1279,7 +1280,11 @@ def _build_labels_panel(state: _RenderState) -> None:
         state.labels_panel = exp
         with ui.column().classes("w-full gap-1"):
             state.labels_list_container = ui.column().classes("w-full gap-1")
-            with ui.row().classes("w-full justify-end"):
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button(
+                    "Catalog…", icon="search",
+                    on_click=lambda: _open_catalog_popover(state),
+                ).props("dense flat")
                 ui.button(
                     "Add label", icon="add",
                     on_click=lambda: _toggle_click_to_add(state),
@@ -1364,6 +1369,83 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
                 dialog.close()
 
             ui.button("Save", color="primary", on_click=_save)
+    dialog.open()
+
+
+def _open_catalog_popover(state: _RenderState) -> None:
+    """Add a label by entering its sky coordinates instead of clicking."""
+    if not state.pipeline or not state.pipeline.project:
+        ui.notify("Load a capture first", type="warning")
+        return
+    project = state.pipeline.project
+    if not project.capture_points:
+        ui.notify("No capture points in manifest", type="warning")
+        return
+    frame_idx = state.selected_frame
+    ref_point = next(
+        (p for p in project.capture_points if p.index == frame_idx),
+        project.capture_points[0],
+    )
+
+    with ui.dialog() as dialog, ui.card().classes("w-96"):
+        ui.label("Add catalog label").classes("text-md font-bold")
+        ui.label(
+            f"Reference frame {ref_point.index}: "
+            f"RA={ref_point.ra:.4f}°  Dec={ref_point.dec:.4f}°",
+        ).classes("text-xs text-grey")
+        text_in = ui.input("Text", value="")
+        ra_in = ui.number(
+            "RA (deg)", value=ref_point.ra,
+            format="%.6f", step=0.0001,
+        )
+        dec_in = ui.number(
+            "Dec (deg)", value=ref_point.dec,
+            format="%.6f", step=0.0001,
+        )
+        catalog_id_in = ui.input("Catalog ID (optional)", value="")
+        color_in = ui.input("Color (hex)", value="#ffff00")
+        marker_in = ui.select(
+            ["none", "dot", "cross", "circle"],
+            value="circle", label="Marker",
+        )
+        with ui.row().classes("w-full justify-end"):
+            ui.button("Cancel", on_click=dialog.close).props("flat")
+
+            def _save() -> None:
+                from src.config import settings
+                from src.renderer.labels import catalog_to_ref_pixel
+                pipeline = state.pipeline
+                if not pipeline or not pipeline.project:
+                    return
+                debayered = pipeline.debayered_frame(ref_point.index)
+                orig_h, orig_w = debayered.shape[:2]
+                px, py = catalog_to_ref_pixel(
+                    ra_deg=float(ra_in.value or ref_point.ra),
+                    dec_deg=float(dec_in.value or ref_point.dec),
+                    frame_center_ra_deg=ref_point.ra,
+                    frame_center_dec_deg=ref_point.dec,
+                    frame_dims=(orig_w, orig_h),
+                    pixel_scale_arcsec=settings.pixel_scale_arcsec,
+                    north_angle_deg=pipeline.project.north_angle_deg,
+                )
+                new_label = Label(
+                    id=str(uuid.uuid4()),
+                    text=text_in.value or (catalog_id_in.value or ""),
+                    ref_frame_index=ref_point.index,
+                    x=px, y=py,
+                    color=color_in.value or "#ffff00",
+                    marker=marker_in.value or "circle",
+                    source="catalog",
+                    catalog_ra=float(ra_in.value),
+                    catalog_dec=float(dec_in.value),
+                    catalog_id=(catalog_id_in.value or None),
+                )
+                pipeline.project.labels.append(new_label)
+                _persist_project(state)
+                _refresh_labels_list(state)
+                dialog.close()
+
+            ui.button("Add", color="primary", on_click=_save)
     dialog.open()
 
 
