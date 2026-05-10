@@ -18,6 +18,7 @@ import numpy as np
 from pydantic import BaseModel
 
 from src.config import settings
+from src.models.project import Label, Project
 from src.renderer.alignment import (
     AlignmentResult,
     align_pair,
@@ -26,6 +27,7 @@ from src.renderer.alignment import (
 from src.renderer.debayer import DebayerMode, debayer_frame, detect_bayer
 from src.renderer.gil_watchdog import check_gil_state, reset_run_state
 from src.renderer.importer import FrameInfo, load_frame, load_manifest
+from src.renderer.labels import _draw_labels, cumulative_offset
 from src.renderer.stretch import (
     AutoStretchParams,
     StretchParams,
@@ -142,6 +144,10 @@ class RenderConfig:
     linear_pan_blend_tail: int = field(
         default_factory=lambda: settings.render_linear_pan_blend_tail,
     )
+    # Burn project labels into each frame via PIL (#130). When False,
+    # produces a clean clip even if the manifest has a non-empty labels
+    # list — used by ``--no-labels`` and the UI's "render clean" toggle.
+    render_labels: bool = True
 
 
 class RenderPipeline:
@@ -158,9 +164,14 @@ class RenderPipeline:
         self.config = config
         self.frames: list[FrameInfo] = []
         self._alignments: list[AlignmentResult] = []
+        # Populated by :meth:`load`. Holds the parsed manifest including
+        # labels (#130). ``None`` before ``load`` is called.
+        self.project: Project | None = None
 
     def load(self) -> None:
         """Load manifest and frame metadata."""
+        manifest_path = self.capture_dir / "manifest.json"
+        self.project = Project.model_validate_json(manifest_path.read_text())
         self.frames = load_manifest(self.capture_dir)
         logger.info("Loaded %d frames", len(self.frames))
 
@@ -182,6 +193,25 @@ class RenderPipeline:
         wasting CPU on frames that would just be dropped at encode time.
         """
         return max(1, round(self.config.crossfade_frames / self.config.speed))
+
+    def _label_offsets(
+        self,
+        labels: list[Label],
+        frame_index: int,
+    ) -> list[tuple[float, float]]:
+        """Cumulative offsets per label from its ref frame to ``frame_index``.
+
+        Used by the label-draw call sites to position each label on the
+        currently-being-written frame. Returns one ``(dx, dy)`` per
+        label in the same order, suitable to pass directly to
+        :func:`_draw_labels`.
+        """
+        return [
+            cumulative_offset(
+                self._alignments, label.ref_frame_index, frame_index,
+            )
+            for label in labels
+        ]
 
     def skip_frame(self, index: int) -> None:
         """Mark a frame as skipped."""
@@ -472,6 +502,15 @@ class RenderPipeline:
         is_pan = self.config.transition == "linear-pan" and margins != (0, 0)
         mx, my = margins
 
+        # Labels to burn into every frame (#130). Empty when either the
+        # config flag is off or the manifest has no labels — keeps the
+        # per-frame fast path zero-cost in that common case.
+        labels: list[Label] = (
+            self.project.labels
+            if (self.project and self.config.render_labels)
+            else []
+        )
+
         prev_stretched: np.ndarray | None = None
         dims_logged = False
 
@@ -579,6 +618,13 @@ class RenderPipeline:
                 # stays sequential — it's already a single PNG per
                 # outer iteration and not the bottleneck.
                 if not has_transitions:
+                    if labels:
+                        current_stretched = _draw_labels(
+                            current_stretched, labels,
+                            self._label_offsets(labels, i),
+                            (current_stretched.shape[1],
+                             current_stretched.shape[0]),
+                        )
                     write_frame_png(current_stretched, temp, frame_counter)
                     frame_counter += 1
                     render_progress.increment()
@@ -619,6 +665,12 @@ class RenderPipeline:
                 last = prev_stretched[my:my + crop_h, mx:mx + crop_w]
             else:
                 last = prev_stretched
+            if labels:
+                last = _draw_labels(
+                    last, labels,
+                    self._label_offsets(labels, len(active) - 1),
+                    (last.shape[1], last.shape[0]),
+                )
             # Position after all transition frames: pairs contribute
             # exactly ``effective_crossfade_frames`` each.
             final_idx = (len(active) - 1) * self.effective_crossfade_frames
@@ -691,13 +743,40 @@ class RenderPipeline:
         race. Worker exceptions propagate through ``.result()`` in the
         main loop and abort the render.
 
+        Labels (#130) are interpolated between the two keyframe offsets
+        and burned into each transition frame just before its PNG
+        write.
+
         Returns:
             The number of frames written.
         """
+        labels: list[Label] = (
+            self.project.labels
+            if (self.project and self.config.render_labels)
+            else []
+        )
+        n = self.effective_crossfade_frames
+        # Pre-compute the two endpoint offsets for each label so the
+        # per-frame loop only does a small interpolation.
+        offs_a: list[tuple[float, float]] = []
+        offs_b: list[tuple[float, float]] = []
+        if labels:
+            offs_a = self._label_offsets(labels, pair_idx)
+            offs_b = self._label_offsets(labels, pair_idx + 1)
         count = 0
         for offset, tf in enumerate(self._make_transition_pair(
             prev_stretched, current_stretched, pair_idx, margins,
         )):
+            if labels:
+                t = (offset + 1) / n
+                interp = [
+                    (a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1]))
+                    for a, b in zip(offs_a, offs_b, strict=True)
+                ]
+                tf = _draw_labels(
+                    tf, labels, interp,
+                    (tf.shape[1], tf.shape[0]),
+                )
             write_frame_png(tf, temp, start_frame_number + offset)
             progress.increment()
             count += 1

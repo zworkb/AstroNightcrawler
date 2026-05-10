@@ -7,6 +7,12 @@ of truth.
 
 from __future__ import annotations
 
+import math
+
+import numpy as np
+from PIL import Image, ImageDraw, ImageFont
+
+from src.models.project import Label
 from src.renderer.alignment import AlignmentResult
 
 
@@ -32,18 +38,30 @@ def cumulative_offset(
     """
     if from_index == to_index:
         return (0.0, 0.0)
+    if not alignments:
+        # No alignment chain available (e.g. transition="none" path that
+        # skips the alignment phase). Treat every frame as identical to
+        # the reference — labels appear at their stored ``(x, y)`` on
+        # every frame. This matches the intuition that a clip with no
+        # tracking simply doesn't shift labels around.
+        return (0.0, 0.0)
     if from_index < to_index:
         sign = 1.0
         lo, hi = from_index, to_index
     else:
         sign = -1.0
         lo, hi = to_index, from_index
+    # Clamp to the available chain length. The chain is N-1 for N frames,
+    # so walking past its end (e.g. when ``transition="none"`` is mixed
+    # with a partial alignment list, or after outlier filtering) clips
+    # the walk silently rather than crashing — labels stop tracking at
+    # the last known offset, which is the least-surprising fallback.
+    hi = min(hi, len(alignments))
+    if hi <= lo:
+        return (0.0, 0.0)
     dx = sum(alignments[i].dx for i in range(lo, hi))
     dy = sum(alignments[i].dy for i in range(lo, hi))
     return (sign * dx, sign * dy)
-
-
-from src.models.project import Label
 
 
 def project_label_to_frame(
@@ -70,9 +88,6 @@ def project_label_to_frame(
     width, height = frame_dims
     in_view = 0.0 <= px < width and 0.0 <= py < height
     return (px, py, in_view)
-
-
-import math
 
 
 def catalog_to_ref_pixel(
@@ -132,3 +147,104 @@ def catalog_to_ref_pixel(
     rotated_y = sin_t * sky_east + cos_t * sky_north
 
     return (cx + rotated_x, cy + rotated_y)
+
+
+def _resolve_font(size: int) -> ImageFont.ImageFont:
+    """Load a sensible default font; fall back to the bitmap default.
+
+    PIL's default font is a tiny bitmap; for legible labels we want
+    a TrueType font. The DejaVu set ships with most Linux distros and
+    is what NiceGUI's filmstrip thumbs already implicitly rely on.
+    """
+    candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+    ]
+    for path in candidates:
+        try:
+            return ImageFont.truetype(path, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _draw_marker(
+    draw: ImageDraw.ImageDraw,
+    px: float,
+    py: float,
+    marker: str,
+    color: str,
+    size: int = 6,
+) -> None:
+    """Draw the marker glyph in-place on the given draw context."""
+    if marker == "none":
+        return
+    s = size
+    if marker == "dot":
+        draw.ellipse(
+            [(px - s / 2, py - s / 2), (px + s / 2, py + s / 2)],
+            fill=color,
+        )
+    elif marker == "cross":
+        draw.line([(px - s, py), (px + s, py)], fill=color, width=2)
+        draw.line([(px, py - s), (px, py + s)], fill=color, width=2)
+    elif marker == "circle":
+        draw.ellipse(
+            [(px - s, py - s), (px + s, py + s)],
+            outline=color, width=2,
+        )
+
+
+def _draw_labels(
+    frame: np.ndarray,
+    labels: list[Label],
+    offsets: list[tuple[float, float]],
+    frame_dims: tuple[int, int],
+) -> np.ndarray:
+    """Draw labels in-place via PIL.
+
+    Args:
+        frame: 8-bit RGB numpy array (H, W, 3).
+        labels: One Label per element of ``offsets``.
+        offsets: ``(dx, dy)`` cumulative offset from each label's
+            ``ref_frame_index`` to the current frame. Length must
+            equal ``len(labels)``.
+        frame_dims: ``(width, height)`` matching the array's shape.
+
+    Returns:
+        The annotated frame (uint8 RGB). If ``labels`` is empty, the
+        original array is returned unchanged; otherwise a fresh array
+        is returned (PIL round-trip).
+    """
+    if len(labels) != len(offsets):
+        msg = (
+            f"labels ({len(labels)}) and offsets ({len(offsets)}) "
+            f"length mismatch"
+        )
+        raise ValueError(msg)
+    if not labels:
+        return frame
+
+    pil = Image.fromarray(frame)
+    draw = ImageDraw.Draw(pil)
+
+    width, height = frame_dims
+    drew_any = False
+    for label, (dx, dy) in zip(labels, offsets, strict=True):
+        px = label.x - dx
+        py = label.y - dy
+        if not (0.0 <= px < width and 0.0 <= py < height):
+            continue
+        _draw_marker(draw, px, py, label.marker, label.color)
+        if label.text:
+            font = _resolve_font(label.font_size)
+            tx = px + label.text_offset_x
+            ty = py + label.text_offset_y
+            draw.text((tx, ty), label.text, fill=label.color, font=font)
+        drew_any = True
+
+    if not drew_any:
+        # All labels were out of view; preserve original-array identity
+        # so callers can detect "no-op" via ``np.array_equal`` cheaply.
+        return frame
+    return np.array(pil)

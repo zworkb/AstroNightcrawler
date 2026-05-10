@@ -48,6 +48,14 @@ class Settings(BaseSettings):
             "~50 MB/worker for alignment, ~78 MB/worker for stretch."
         ),
     )
+    pixel_scale_arcsec: float = Field(
+        default=1.0,
+        description=(
+            "Arcseconds per pixel of the optical setup. "
+            "Used to convert catalog RA/Dec to reference-frame pixels. "
+            "Override via NC_PIXEL_SCALE_ARCSEC."
+        ),
+    )
     render_linear_pan_blend_tail: int = Field(
         default=0,
         description=(

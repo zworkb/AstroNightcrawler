@@ -67,6 +67,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "GUI value (when running --ui) still wins over this flag."
         ),
     )
+    p.add_argument(
+        "--no-labels", action="store_true",
+        help="Render without labels (overrides manifest's labels list)",
+    )
     p.add_argument("--keep-frames", action="store_true", help="Keep intermediate PNGs")
     p.add_argument("--temp-dir", type=Path, default=None, help="Custom temp directory")
     p.add_argument("--ui", action="store_true", help="Start web UI instead of CLI render")
@@ -125,6 +129,7 @@ def _build_config(args: argparse.Namespace) -> RenderConfig:
         keep_frames=args.keep_frames,
         temp_dir=args.temp_dir,
         render_workers=workers,
+        render_labels=not args.no_labels,
     )
 
 
