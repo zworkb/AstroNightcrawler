@@ -18,7 +18,6 @@
 #: qa.ruff
 #: qa.test
 #: qa.ty
-#: qa.zpretty
 #
 # SETTINGS (ALL CHANGES MADE BELOW SETTINGS WILL BE LOST)
 ##############################################################################
@@ -110,12 +109,6 @@ MXDEV?=mxdev
 # mxmake to install in virtual environment.
 # Default: mxmake
 MXMAKE?=mxmake
-
-## qa.zpretty
-
-# Source folder to scan for XML and ZCML files.
-# Default: src
-ZPRETTY_SRC?=src
 
 ## qa.ruff
 
@@ -384,44 +377,6 @@ INSTALL_TARGETS+=mxenv
 DIRTY_TARGETS+=mxenv-dirty
 CLEAN_TARGETS+=mxenv-clean
 
-##############################################################################
-# zpretty
-##############################################################################
-
-# Adjust ZPRETTY_SRC to respect PROJECT_PATH_PYTHON if still at default
-ifeq ($(ZPRETTY_SRC),src)
-ZPRETTY_SRC:=$(PYTHON_PROJECT_PREFIX)src
-endif
-
-ZPRETTY_TARGET:=$(SENTINEL_FOLDER)/zpretty.sentinel
-$(ZPRETTY_TARGET): $(MXENV_TARGET)
-	@echo "Install zpretty"
-	@$(PYTHON_PACKAGE_COMMAND) install zpretty
-	@touch $(ZPRETTY_TARGET)
-
-.PHONY: zpretty-check
-zpretty-check: $(ZPRETTY_TARGET)
-	@echo "Run zpretty check in: $(ZPRETTY_SRC)"
-	@find $(ZPRETTY_SRC) -name '*.zcml' -or -name '*.xml' -exec zpretty --check {} +
-
-.PHONY: zpretty-format
-zpretty-format: $(ZPRETTY_TARGET)
-	@echo "Run zpretty format in: $(ZPRETTY_SRC)"
-	@find $(ZPRETTY_SRC) -name '*.zcml' -or -name '*.xml' -exec zpretty -i {} +
-
-.PHONY: zpretty-dirty
-zpretty-dirty:
-	@rm -f $(ZPRETTY_TARGET)
-
-.PHONY: zpretty-clean
-zpretty-clean: zpretty-dirty
-	@test -e $(MXENV_PYTHON) && $(MXENV_PYTHON) -m pip uninstall -y zpretty || :
-
-INSTALL_TARGETS+=$(ZPRETTY_TARGET)
-CHECK_TARGETS+=zpretty-check
-FORMAT_TARGETS+=zpretty-format
-DIRTY_TARGETS+=zpretty-dirty
-CLEAN_TARGETS+=zpretty-clean
 
 ##############################################################################
 # ruff
