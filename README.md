@@ -11,6 +11,43 @@ A browser-based application for planning and executing imaging sequences with a 
 - **Export** sequences for EKOS/KStars as an alternative to direct INDI control
 - **Render** captured frames into video with debayering, stretch, star alignment, and transitions
 
+## Installation
+
+Three install profiles match the three deployment scenarios. The capture
+machine (typically a Raspberry Pi) does not need the render-only packages
+(`scipy`, `astroalign`, `colour-demosaicing`, `Pillow`), so it can skip them.
+
+### Capture machine (Raspberry Pi)
+
+The capture and planner UI runs on the machine that controls the
+telescope. It needs the core dependencies only.
+
+```bash
+UV_PYTHON=3.13 make install-capture
+```
+
+The planner UI is then available at `http://<raspi-ip>:8090`.
+
+### Rendering workstation
+
+The renderer runs on a workstation. It needs the render extras
+(scipy, astroalign, colour-demosaicing, Pillow). Free-threaded
+Python 3.13t is recommended to escape the GIL during alignment.
+
+```bash
+make install-render
+PYTHON_GIL=0 nightcrawler-render --ui
+```
+
+### Development
+
+For development and CI, install everything (core + render extras + the
+QA toolchain — ruff, mypy, pytest, etc.):
+
+```bash
+make install
+```
+
 ## Quick Start
 
 ### Planner & Capture
@@ -18,7 +55,7 @@ A browser-based application for planning and executing imaging sequences with a 
 ```bash
 git clone git@github.com:zworkb/AstroNightcrawler.git
 cd AstroNightcrawler
-make install    # Python venv + all dependencies
+make install    # Python venv + all dependencies (see Installation above)
 make run        # Start the planner app (auto-downloads sky data on first run)
 ```
 

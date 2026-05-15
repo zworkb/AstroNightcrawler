@@ -865,6 +865,24 @@ $(INSTALL_TARGET): $(INSTALL_TARGETS)
 install: $(INSTALL_TARGET)
 	@touch $(INSTALL_TARGET)
 
+##############################################################################
+# Profile install targets (issue #134)
+##############################################################################
+# Lean install paths that bypass the mxmake QA toolchain. Intended for
+# production deployments: `install-capture` on the Raspberry Pi (core only),
+# `install-render` on the rendering workstation (core + render extras).
+# `make install` retains its full dev/CI behaviour above.
+
+.PHONY: install-capture
+install-capture: $(MXENV_TARGET)
+	@echo "Installing capture profile (core deps only)"
+	@$(PYTHON_PACKAGE_COMMAND) install -e .
+
+.PHONY: install-render
+install-render: $(MXENV_TARGET)
+	@echo "Installing render profile (core + render extras)"
+	@$(PYTHON_PACKAGE_COMMAND) install -e ".[render]"
+
 .PHONY: run
 run: $(RUN_TARGET)
 
