@@ -2,11 +2,11 @@ NC_HOST ?= 0.0.0.0
 NC_PORT ?= 8090
 SKYDATA_URL ?= https://stellarium-web.org/skydata
 
-.PHONY: run-capturing run-render skydata skydata-extra skydata-dso skydata-stars-deep
+.PHONY: run-capture run-render skydata skydata-extra skydata-dso skydata-stars-deep
 
 run-render: install-render .env
 	PYTHON_GIL=0 python -c "from src.renderer.cli import main; main(['--ui'])"
-run-capturing: install-capture .env skydata
+run-capture: install-capture .env skydata
 	NC_HOST=$(NC_HOST) NC_PORT=$(NC_PORT) python -c "from src.main import main; main()"
 
 .env:

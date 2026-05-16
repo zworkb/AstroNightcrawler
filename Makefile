@@ -30,7 +30,7 @@ DEPLOY_TARGETS?=
 
 # target to be executed when calling `make run`
 # No default value.
-RUN_TARGET?=run-capturing
+RUN_TARGET?=run-capture
 
 # Additional files and folders to remove when running clean target
 # No default value.
