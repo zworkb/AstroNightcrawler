@@ -82,7 +82,7 @@ async def test_full_capture_workflow(tmp_path: Path) -> None:
     assert controller.state == CaptureState.COMPLETED
     for pt in state.project.capture_points:
         assert pt.status == "captured"
-        assert len(pt.files) >= 1
+        assert pt.good_count >= 1
 
     fits_files = list(output_dir.rglob("*.fits"))
     assert len(fits_files) == len(state.project.capture_points)

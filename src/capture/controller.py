@@ -63,6 +63,7 @@ class CaptureController:
         project: Project,
         indi_client: INDIClient,
         output_dir: Path,
+        night: int = 1,
     ) -> None:
         """Initialise the controller.
 
@@ -70,10 +71,14 @@ class CaptureController:
             project: The project containing capture points and settings.
             indi_client: Connected INDI client implementation.
             output_dir: Directory for FITS output files.
+            night: Capture-session night number stamped onto every frame
+                written in this run (1 for a fresh project, incremented for
+                each subsequent multi-night session).
         """
         self.project = project
         self.indi = indi_client
         self.output_dir = output_dir
+        self.night = night
         self.writer = FITSWriter(output_dir)
         self.state = CaptureState.IDLE
         self.current_point_index: int = 0
@@ -93,8 +98,14 @@ class CaptureController:
 
         Iterates all capture points, skipping those already captured.
         On completion writes a manifest. Respects pause and cancel.
+
+        Before the loop, reconciles the project's frames against the FITS
+        files actually on disk (only when the output dir already holds
+        frames) so files deleted since the project was opened lower
+        ``good_count`` and get refilled this run.
         """
         self._loop = asyncio.get_running_loop()
+        self._reconcile_before_run()
         self.state = CaptureState.RUNNING
         # Unpark mount before starting the sequence
         if hasattr(self.indi, "unpark"):
@@ -109,7 +120,7 @@ class CaptureController:
                 self.state = CaptureState.CANCELLED
                 return
             point = points[self.current_point_index]
-            if point.status == "captured":
+            if point.is_complete:
                 self.current_point_index += 1
                 continue
             await self._capture_point(point)
@@ -182,7 +193,7 @@ class CaptureController:
             await self._slew_with_retry(point.ra, point.dec)
             await self._capture_exposures(point)
             point.status = "captured"
-            point.captured_at = datetime.now(UTC).isoformat()
+            point.captured_at = datetime.now(UTC)
             self._save_manifest()
             logger.info("Point %d captured OK", point.index)
         except TimeoutError as exc:
@@ -238,7 +249,7 @@ class CaptureController:
         timeout = settings.exposure_seconds + cfg.capture_timeout_extra
         for i in range(1, settings.exposures_per_point + 1):
             data = await self._capture_single(params, timeout)
-            self.writer.write(point, i, data)
+            self.writer.write(point, i, data, night=self.night)
 
     async def _capture_single(
         self, params: CaptureParams, timeout: float
@@ -285,6 +296,27 @@ class CaptureController:
         success = await self.indi.reconnect(timeout=60)
         if not success:
             self._handle_error(point, "Connection lost, reconnect failed")
+
+    def _reconcile_before_run(self) -> None:
+        """Reconcile frames vs. disk at run start; refill missing ones.
+
+        No-op for a fresh project with no frames yet (avoids log noise on
+        an empty directory). For a resumed project, drops frames whose FITS
+        file vanished since opening so those points become incomplete again
+        and get re-captured this run.
+        """
+        has_frames = any(pt.frames for pt in self.project.capture_points)
+        if not has_frames:
+            return
+        report = self.project.reconcile_with_disk(self.output_dir)
+        if report.removed_count:
+            logger.info(
+                "Reconcile before run: %d frame(s) missing on disk, "
+                "will be re-captured (points %s)",
+                report.removed_count, report.affected_points,
+            )
+        else:
+            logger.info("Reconcile before run: all frames present on disk")
 
     def _save_manifest(self) -> None:
         """Write the project JSON to output_dir/manifest.json."""

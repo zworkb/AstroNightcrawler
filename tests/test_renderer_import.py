@@ -6,8 +6,17 @@ import numpy as np
 import pytest
 from astropy.io import fits
 
-from src.models.project import CapturePoint, CaptureSettings, ControlPoint, Project, SplinePath
+from src.models.project import (
+    CapturedFrame,
+    CapturePoint,
+    CaptureSettings,
+    ControlPoint,
+    Project,
+    SplinePath,
+)
 from src.renderer.importer import load_frame, load_manifest
+
+LEGACY_FIXTURE = Path(__file__).parent / "fixtures" / "legacy_manifest_v1.json"
 
 
 @pytest.fixture()
@@ -31,12 +40,14 @@ def capture_dir(tmp_path: Path) -> Path:
         capture_settings=CaptureSettings(exposure_seconds=5.0),
         capture_points=[
             CapturePoint(
-                ra=10.0, dec=40.0, index=0, status="captured", files=["seq_0001_001.fits"]
+                ra=10.0, dec=40.0, index=0, status="captured",
+                frames=[CapturedFrame(filename="seq_0001_001.fits", status="good")],
             ),
             CapturePoint(
-                ra=10.5, dec=40.5, index=1, status="captured", files=["seq_0002_001.fits"]
+                ra=10.5, dec=40.5, index=1, status="captured",
+                frames=[CapturedFrame(filename="seq_0002_001.fits", status="good")],
             ),
-            CapturePoint(ra=11.0, dec=41.0, index=2, status="skipped", files=[]),
+            CapturePoint(ra=11.0, dec=41.0, index=2, skipped=True),
         ],
     )
     (tmp_path / "manifest.json").write_text(project.model_dump_json(indent=2))
@@ -61,6 +72,15 @@ class TestLoadManifest:
     def test_missing_manifest_raises(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
             load_manifest(tmp_path)
+
+    def test_legacy_manifest_loads_only_good_frames(self, tmp_path: Path) -> None:
+        """Old v1.0 manifest migrates and yields only captured (good) frames."""
+        (tmp_path / "manifest.json").write_text(LEGACY_FIXTURE.read_text())
+        frames = load_manifest(tmp_path)
+        # Fixture: indices 0 and 3 captured, 1 pending, 2 skipped.
+        assert [f.index for f in frames] == [0, 3]
+        assert frames[0].fits_path == tmp_path / "seq_0001_001.fits"
+        assert frames[1].fits_path == tmp_path / "seq_0004_001.fits"
 
 
 class TestLoadFrame:

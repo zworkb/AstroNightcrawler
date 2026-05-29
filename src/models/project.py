@@ -1,9 +1,13 @@
 """Pydantic data models for telescope imaging sequence projects."""
 
-from datetime import UTC, datetime
-from typing import Literal
+from __future__ import annotations
 
-from pydantic import BaseModel, Field, field_validator
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class Coordinate(BaseModel):
@@ -96,17 +100,77 @@ class CaptureSettings(BaseModel):
         return v
 
 
+class CapturedFrame(BaseModel):
+    """A single sub-exposure captured at a capture point."""
+
+    filename: str = Field(description="Relative FITS filename, e.g. seq_0001_001.fits")
+    status: Literal["good", "rejected", "pending"] = Field(
+        default="good", description="Per-frame quality status"
+    )
+    night: int = Field(default=1, description="Which capture session produced this frame")
+    captured_at: datetime | None = Field(
+        default=None, description="UTC timestamp of capture (ISO 8601 in JSON)"
+    )
+    # Quality metrics (hfr, star_count, snr) are added in a later issue (#139).
+
+
 class CapturePoint(Coordinate):
-    """A point where an image is captured, with status tracking."""
+    """A point where an image is captured, with per-frame status tracking."""
 
     index: int = Field(ge=0, description="Zero-based index along the path")
     status: Literal["pending", "capturing", "captured", "failed", "skipped"] = Field(
-        default="pending", description="Capture status"
+        default="pending", description="In-flight capture status (transient)"
     )
-    files: list[str] = Field(default_factory=list, description="List of captured file paths")
-    captured_at: str | None = Field(
-        default=None, description="ISO 8601 UTC timestamp of capture completion"
+    target_subs: int = Field(default=1, description="Number of GOOD subs wanted here")
+    frames: list[CapturedFrame] = Field(
+        default_factory=list, description="Captured sub-exposures at this point"
     )
+    skipped: bool = Field(default=False, description="Point deliberately skipped")
+    captured_at: datetime | None = Field(
+        default=None, description="UTC timestamp of last capture (ISO 8601 in JSON)"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy(cls, data: Any) -> Any:
+        """Migrate legacy v1.0 dicts (files: list[str]) to the frame schema.
+
+        Runs before field validation so old JSON never collides with the new
+        schema. New-schema dicts (already carrying ``frames``) pass through.
+        """
+        if not isinstance(data, dict):
+            return data
+        if "frames" in data:
+            return data  # already new schema
+        legacy_files = data.get("files", []) or []
+        legacy_status = data.get("status", "pending")
+        captured_at = data.get("captured_at")
+        # Old points kept all their files; treat each as a good frame.
+        data["frames"] = [
+            {"filename": f, "status": "good", "night": 1, "captured_at": captured_at}
+            for f in legacy_files
+        ]
+        # Preserve the old completion decision: a point that was "captured"
+        # must stay complete after migration, even if it has fewer files than
+        # exposures_per_point -- otherwise re-opening an old finished project
+        # would falsely look incomplete and trigger unwanted re-capture.
+        if legacy_status == "captured":
+            data["target_subs"] = max(len(legacy_files), 1)
+        else:
+            data.setdefault("target_subs", 1)  # planner overrides w/ exposures_per_point
+        data.setdefault("skipped", legacy_status == "skipped")
+        data.pop("files", None)
+        return data
+
+    @property
+    def good_count(self) -> int:
+        """Number of frames with status 'good'."""
+        return sum(1 for f in self.frames if f.status == "good")
+
+    @property
+    def is_complete(self) -> bool:
+        """True if skipped or enough good subs have been captured."""
+        return self.skipped or self.good_count >= self.target_subs
 
     def filename(self, exposure: int) -> str:
         """Generate a FITS filename for this capture point.
@@ -159,13 +223,24 @@ class Label(BaseModel):
     catalog_id: str | None = Field(default=None, description="Source identifier, e.g. 'M27'")
 
 
+@dataclass
+class ReconcileReport:
+    """Result of reconciling a project's frames against the filesystem.
+
+    Not persisted, so a plain dataclass is sufficient.
+    """
+
+    removed_count: int = 0
+    affected_points: list[int] = field(default_factory=list)
+
+
 class Project(BaseModel):
     """Top-level project container, serializable to JSON."""
 
-    version: str = Field(default="1.0", description="Project file format version")
-    created: str = Field(
-        default_factory=lambda: datetime.now(UTC).isoformat(),
-        description="ISO 8601 UTC creation timestamp",
+    version: str = Field(default="2.0", description="Project file format version")
+    created: datetime = Field(
+        default_factory=lambda: datetime.now(UTC),
+        description="UTC creation timestamp (ISO 8601 in JSON)",
     )
     project: str = Field(description="Project name")
     path: SplinePath = Field(description="The spline path for the sequence")
@@ -182,3 +257,56 @@ class Project(BaseModel):
         description="Sky orientation correction in degrees; 0° = north up. "
                     "Per-project because mount alignment quirks vary by session.",
     )
+
+    @model_validator(mode="after")
+    def _stamp_current_version(self) -> Project:
+        """Stamp the current schema version after (migrating) load.
+
+        Old manifests carry version "1.0"; once their points have been
+        migrated to the frame schema they are effectively "2.0", so saving
+        them again writes the new version and no migration is needed next.
+        """
+        self.version = "2.0"
+        return self
+
+    def next_night(self) -> int:
+        """Return the night number for the next capture session.
+
+        Each capture session tags its frames with a night number so a
+        multi-night project can tell which session produced which frame.
+        The next night is one more than the highest night seen across all
+        existing frames; a brand-new project (no frames yet) starts at 1.
+
+        Returns:
+            ``max(existing nights) + 1``, or 1 when there are no frames.
+        """
+        return max(
+            (f.night for pt in self.capture_points for f in pt.frames),
+            default=0,
+        ) + 1
+
+    def reconcile_with_disk(self, capture_dir: Path) -> ReconcileReport:
+        """Drop frames whose FITS file no longer exists on disk.
+
+        The filesystem is authoritative: a frame whose file was deleted
+        outside the app is removed from ``frames``, which lowers
+        ``good_count`` and makes the point incomplete again, so the next
+        capture run refills the gap up to ``target_subs``. A manual file
+        delete thus behaves exactly like rejecting the frame.
+
+        Args:
+            capture_dir: Directory holding the FITS files.
+
+        Returns:
+            A report with the number of removed frames and the indices of
+            affected capture points.
+        """
+        report = ReconcileReport()
+        for point in self.capture_points:
+            kept = [f for f in point.frames if (capture_dir / f.filename).exists()]
+            removed = len(point.frames) - len(kept)
+            if removed:
+                point.frames = kept
+                report.removed_count += removed
+                report.affected_points.append(point.index)
+        return report

@@ -14,6 +14,7 @@ from src.indi.client import INDIClient
 from src.models.project import (
     CapturePoint,
     Project,
+    ReconcileReport,
     SplinePath,
 )
 from src.models.spline import sample_points_along_spline
@@ -21,54 +22,66 @@ from src.models.undo import UndoStack
 
 
 def _restore_from_manifest(project: Project, manifest_path: Path) -> None:
-    """Restore capture point statuses from an existing manifest.
+    """Restore captured state from an existing manifest.
 
-    Points that were captured in the previous session are marked as
-    "captured" so the controller skips them.
+    Routes the saved manifest through ``Project.model_validate_json`` so the
+    legacy migration validator and datetime parsing run automatically, then
+    merges captured frames into the current plan by point index. Points that
+    were complete (or skipped) in the previous session keep their frames so
+    the controller skips them.
     """
-    data = json.loads(manifest_path.read_text())
-    saved_points = data.get("capture_points", [])
+    saved = Project.model_validate_json(manifest_path.read_text())
+    saved_by_index = {sp.index: sp for sp in saved.capture_points}
 
-    # Build a lookup: index -> status
-    status_map: dict[int, tuple[str, list[str], str | None]] = {}
-    for sp in saved_points:
-        idx = sp.get("index")
-        status = sp.get("status", "pending")
-        files = sp.get("files", [])
-        captured_at = sp.get("captured_at")
-        if idx is not None:
-            status_map[idx] = (status, files, captured_at)
-
-    # Apply to current project's capture points
     for point in project.capture_points:
-        if point.index in status_map:
-            status, files, captured_at = status_map[point.index]
-            if status == "captured":
+        sp = saved_by_index.get(point.index)
+        if sp is None:
+            continue
+        if sp.skipped:
+            point.skipped = True
+            point.status = "skipped"
+            continue
+        if sp.frames:
+            point.frames = [f.model_copy(deep=True) for f in sp.frames]
+            point.target_subs = sp.target_subs
+            point.captured_at = sp.captured_at
+            if point.is_complete:
                 point.status = "captured"
-                point.files = files
-                point.captured_at = captured_at
 
-    captured = sum(1 for p in project.capture_points if p.status == "captured")
+    captured = sum(1 for p in project.capture_points if p.is_complete)
     logging.getLogger("capture").info(
-        "Resumed from manifest: %d/%d points already captured",
+        "Resumed from manifest: %d/%d points already complete",
         captured, len(project.capture_points),
     )
 
 
-def _resolve_output_dir(project: Project) -> Path:
+def _resolve_output_dir(
+    project: Project, opened_dir: Path | None = None,
+) -> Path:
     """Build output directory: base_dir / sequence_name.
 
-    Uses the sequence name from capture settings, or auto-generates
-    one from the current datetime. If the directory already contains a
-    manifest.json, resumes from the previous capture session. Otherwise,
-    appends a counter if the directory already exists.
+    When *opened_dir* is set (a project was opened via ``open_project``),
+    capture writes back into that exact directory so a subsequent run
+    continues the same project in place — no resume/counter logic is
+    needed because the state is already loaded.
+
+    Otherwise uses the sequence name from capture settings, or
+    auto-generates one from the current datetime. If the directory
+    already contains a manifest.json, resumes from the previous capture
+    session. Otherwise, appends a counter if the directory already exists.
 
     Args:
         project: The project containing capture settings.
+        opened_dir: Directory of a project opened via ``open_project``,
+            or None for a brand-new project.
 
     Returns:
         Path to the created output directory.
     """
+    if opened_dir is not None:
+        opened_dir.mkdir(parents=True, exist_ok=True)
+        return opened_dir
+
     base = Path(settings.output_dir)
     seq_name = project.capture_settings.sequence_name.strip()
     if not seq_name:
@@ -114,6 +127,7 @@ class AppState:
     project: Project = field(default_factory=_default_project)
     indi_client: INDIClient | None = None
     undo_stack: UndoStack = field(default_factory=UndoStack)
+    opened_project_dir: Path | None = None
     current_mode: str = "pan"
     last_camera: dict[str, float] = field(default_factory=lambda: {
         "canvas_width": 800, "canvas_height": 600,
@@ -126,7 +140,7 @@ class AppState:
     def update_capture_points(self) -> None:
         """Re-sample the spline path and rebuild capture points.
 
-        Preserves the status of already-captured points when their
+        Preserves already-complete (or skipped) points when their
         coordinates match an existing capture point.
         """
         spacing = self.project.capture_settings.point_spacing_deg
@@ -136,7 +150,7 @@ class AppState:
         existing = {
             (cp.ra, cp.dec): cp
             for cp in self.project.capture_points
-            if cp.status == "captured"
+            if cp.is_complete
         }
         points: list[CapturePoint] = []
         for idx, (ra, dec) in enumerate(sampled):
@@ -180,6 +194,54 @@ class AppState:
         self.project = Project.model_validate_json(json_str)
         self.update_capture_points()
         self.undo_stack = UndoStack()
+        # Loading a plain plan starts a new project, not a bound resume.
+        self.opened_project_dir = None
+
+    def open_project(self, project_dir: Path) -> ReconcileReport:
+        """Open an existing capture project from its directory.
+
+        Loads ``manifest.json`` (migrating legacy schema via the model
+        validator), reconciles the frame records against the FITS files
+        actually present on disk, and binds the capture output to this
+        directory so a subsequent run continues the same project.
+
+        Unlike ``load_project_from_json`` this does NOT re-sample the
+        spline (``update_capture_points``): the manifest's capture_points
+        are authoritative for an opened project. Re-sampling could drift
+        the coordinates and silently drop the loaded frames (which are
+        preserved only by exact (ra, dec) match), so we keep them as-is.
+
+        Args:
+            project_dir: Directory containing ``manifest.json`` + FITS files.
+
+        Returns:
+            The reconcile report (removed frame count + affected points).
+
+        Raises:
+            FileNotFoundError: If no ``manifest.json`` exists in *project_dir*.
+        """
+        manifest_path = project_dir / "manifest.json"
+        if not manifest_path.exists():
+            msg = f"No manifest.json found in {project_dir}"
+            raise FileNotFoundError(msg)
+
+        self.project = Project.model_validate_json(manifest_path.read_text())
+        report = self.project.reconcile_with_disk(project_dir)
+        self.opened_project_dir = project_dir
+        self.undo_stack = UndoStack()
+
+        complete = sum(1 for p in self.project.capture_points if p.is_complete)
+        log = logging.getLogger("capture")
+        log.info(
+            "Opened project %r: %d/%d points complete",
+            self.project.project, complete, len(self.project.capture_points),
+        )
+        if report.removed_count:
+            log.info(
+                "%d frame(s) missing on disk — will be re-captured (points %s)",
+                report.removed_count, report.affected_points,
+            )
+        return report
 
     def start_capture(self) -> CaptureController:
         """Create a CaptureController for the current project.
@@ -196,21 +258,34 @@ class AppState:
         if self.indi_client is None:
             msg = "No INDI client connected. Use Connect first."
             raise RuntimeError(msg)
-        # Ensure capture points are up to date
-        self.update_capture_points()
+        # For an opened project the manifest's capture_points are
+        # authoritative (and carry the loaded frames), so we must NOT
+        # re-sample the spline here — that could drift coords and drop
+        # captured frames. Only re-sample for in-app planning.
+        if self.opened_project_dir is None:
+            self.update_capture_points()
         if len(self.project.capture_points) < 2:
             msg = "Need at least 2 capture points"
             raise RuntimeError(msg)
-        # Don't reset points that were already captured (from manifest resume)
-        # Only reset non-captured points to ensure clean state
+        # Don't reset points that are already complete (from manifest resume).
+        # Reset incomplete, non-skipped points to a clean pending state and
+        # set how many good subs we want per point from the capture settings.
+        target = self.project.capture_settings.exposures_per_point
         for pt in self.project.capture_points:
-            if pt.status != "captured":
-                pt.status = "pending"
-                pt.files = []
-                pt.captured_at = None
-        output = _resolve_output_dir(self.project)
+            if pt.skipped or pt.is_complete:
+                continue
+            pt.status = "pending"
+            pt.frames = []
+            pt.captured_at = None
+            pt.target_subs = target
+        output = _resolve_output_dir(self.project, self.opened_project_dir)
+        # Tag this session's frames with the next night number: one past the
+        # highest night already recorded, so a multi-night resume keeps each
+        # session's frames distinguishable. A fresh project starts at night 1.
+        night = self.project.next_night()
         return CaptureController(
             project=self.project,
             indi_client=self.indi_client,
             output_dir=output,
+            night=night,
         )

@@ -45,9 +45,12 @@ def load_manifest(capture_dir: Path) -> list[FrameInfo]:
     frames: list[FrameInfo] = []
 
     for point in project.capture_points:
-        if point.status != "captured" or not point.files:
+        if point.skipped:
             continue
-        fits_path = capture_dir / point.files[0]  # v1: first exposure only
+        good = [f for f in point.frames if f.status == "good"]
+        if not good:
+            continue
+        fits_path = capture_dir / good[0].filename  # v1: first good exposure only
         bayer = _read_bayer_pattern(fits_path)
         frames.append(FrameInfo(
             index=point.index,

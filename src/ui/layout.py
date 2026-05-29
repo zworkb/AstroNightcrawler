@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 from typing import Any
 
 from nicegui import app, ui
@@ -34,12 +35,16 @@ _HEAD_CSS = (
 
 
 def _auto_save(state: AppState) -> None:
-    """Save project to server-side user storage for persistence."""
+    """Save project + opened-project binding to server-side storage."""
     data = state.project.model_dump_json()
     app.storage.user["project"] = data
+    app.storage.user["opened_project_dir"] = (
+        str(state.opened_project_dir) if state.opened_project_dir else None
+    )
     logging.getLogger("starmap").info(
-        "Auto-saved project (%d control points, %d bytes)",
+        "Auto-saved project (%d control points, %d bytes, opened_dir=%s)",
         len(state.project.path.control_points), len(data),
+        state.opened_project_dir,
     )
 
 
@@ -65,6 +70,36 @@ def create_layout() -> None:
             )
     else:
         logging.getLogger("starmap").info("No saved project in storage")
+
+    # Restore the opened-project binding so a re-opened project survives a
+    # reload: rebind the output directory and reconcile the restored frames
+    # against the files actually on disk. If the directory/manifest is gone,
+    # clear the stale binding and fall back to default behaviour.
+    opened_dir = app.storage.user.get("opened_project_dir")
+    if opened_dir:
+        p = Path(opened_dir)
+        if (p / "manifest.json").exists():
+            state.opened_project_dir = p
+            try:
+                report = state.project.reconcile_with_disk(p)
+                if report.removed_count:
+                    logging.getLogger("starmap").info(
+                        "Restored opened project %s — reconciled %d missing "
+                        "frame(s)", p, report.removed_count,
+                    )
+                else:
+                    logging.getLogger("starmap").info(
+                        "Restored opened project binding: %s", p,
+                    )
+            except Exception:  # noqa: BLE001
+                logging.getLogger("starmap").warning(
+                    "Reconcile on restore failed for %s", p, exc_info=True,
+                )
+        else:
+            app.storage.user["opened_project_dir"] = None
+            logging.getLogger("starmap").info(
+                "Remembered project dir %s is gone — clearing binding", p,
+            )
 
     capture_view = CaptureViewComponent()
 
@@ -130,6 +165,16 @@ def create_layout() -> None:
         </script>""")
         panel = BottomPanelComponent(state)
         panel.render()
+
+    # Wire the panel refresh + persistence into the toolbar callbacks (same
+    # dict the toolbar holds by reference) so loading/opening a project both
+    # repopulates the Capture Points table AND persists the new state —
+    # including the opened-project binding — so it survives a reload.
+    def _on_project_loaded() -> None:
+        panel.refresh()
+        _auto_save(state)
+
+    callbacks["project_loaded"] = _on_project_loaded
 
     _register_path_events(state, panel)
 

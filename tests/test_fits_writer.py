@@ -44,11 +44,21 @@ def test_write_multi_exposure(output_dir: Path, point: CapturePoint) -> None:
     assert p2.name == "seq_0001_002.fits"
 
 
-def test_write_updates_point_files(output_dir: Path, point: CapturePoint) -> None:
-    """After write, the filename is in point.files list."""
+def test_write_updates_point_frames(output_dir: Path, point: CapturePoint) -> None:
+    """After write, a good CapturedFrame is appended to point.frames."""
     writer = FITSWriter(output_dir)
     writer.write(point, exposure_num=1, data=b"data")
-    assert "seq_0001_001.fits" in point.files
+    assert [f.filename for f in point.frames] == ["seq_0001_001.fits"]
+    assert point.frames[0].status == "good"
+    assert point.frames[0].night == 1
+    assert point.good_count == 1
+
+
+def test_write_stamps_night(output_dir: Path, point: CapturePoint) -> None:
+    """The night argument is stamped onto the appended CapturedFrame."""
+    writer = FITSWriter(output_dir)
+    writer.write(point, exposure_num=1, data=b"data", night=3)
+    assert point.frames[0].night == 3
 
 
 def test_written_file_contains_data(output_dir: Path, point: CapturePoint) -> None:

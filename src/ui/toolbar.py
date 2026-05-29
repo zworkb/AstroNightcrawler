@@ -117,6 +117,12 @@ class ToolbarComponent:
         ).props("flat dense")
         load_btn.tooltip("Load")
 
+        open_btn = ui.button(
+            icon="drive_folder_upload",
+            on_click=self._on_open_project,
+        ).props("flat dense")
+        open_btn.tooltip("Open Project (capture directory)")
+
         ekos_btn = ui.button(
             icon="file_download",
             on_click=self._on_ekos_export,
@@ -261,8 +267,53 @@ class ToolbarComponent:
         dialog.close()
         ui.notify("Project loaded", type="positive")
 
-        # Get camera state synchronously via JS, then refresh overlay.
-        # The JS callback updates last_camera and triggers a Python refresh.
+        self._action("project_loaded")()
+        self._sync_overlay_from_camera()
+
+    async def _on_open_project(self) -> None:
+        """Open the folder browser to pick an existing project directory."""
+        from src.config import settings
+        from src.ui.folder_browser import FolderBrowserDialog
+
+        dialog = FolderBrowserDialog(on_select=self._handle_open_project)
+        dialog.open(Path(settings.output_dir))
+
+    def _handle_open_project(self, project_dir: Path) -> None:
+        """Load the chosen project directory and refresh the star map.
+
+        Args:
+            project_dir: The directory selected in the folder browser.
+        """
+        try:
+            report = self.state.open_project(project_dir)
+        except (FileNotFoundError, ValueError) as exc:
+            ui.notify(f"Could not open project: {exc}", type="negative")
+            return
+
+        project = self.state.project
+        points = project.capture_points
+        complete = sum(1 for p in points if p.is_complete)
+        msg = f"Opened '{project.project}': {complete}/{len(points)} points complete"
+        if report.removed_count:
+            msg += (
+                f" — {report.removed_count} frame(s) missing, "
+                "will be re-captured"
+            )
+        ui.notify(msg, type="positive")
+
+        # Repopulate the Capture Points table (refreshable) and redraw the
+        # star-map overlay. The table refresh is separate from the overlay —
+        # without it the path shows on the map but the table stays empty.
+        self._action("project_loaded")()
+        self._sync_overlay_from_camera()
+
+    def _sync_overlay_from_camera(self) -> None:
+        """Pull live camera state from JS to trigger an overlay redraw.
+
+        The JS callback emits ``camera_state_update``, whose handler
+        updates ``last_camera`` and calls ``refresh_overlay`` so the
+        loaded path/capture points render on the star map.
+        """
         ui.run_javascript("""
             (() => {
                 const cam = window.stelBridge?.getCameraState();

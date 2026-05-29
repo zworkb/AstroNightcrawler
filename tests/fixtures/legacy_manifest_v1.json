@@ -1,0 +1,69 @@
+{
+  "version": "1.0",
+  "created": "2026-03-22T22:07:57.007648+00:00",
+  "project": "deneb",
+  "path": {
+    "control_points": [
+      {
+        "ra": 276.31609135601036,
+        "dec": 74.83396642379223,
+        "label": null,
+        "handle_in": null,
+        "handle_out": {"ra": 275.7941693796908, "dec": 74.89257401050304}
+      },
+      {
+        "ra": 274.7503254270516,
+        "dec": 75.00978918392465,
+        "label": null,
+        "handle_in": {"ra": 275.2754376896139, "dec": 75.01951082432704},
+        "handle_out": {"ra": 274.1753257189429, "dec": 74.99914395471893}
+      }
+    ],
+    "spline_type": "cubic_bezier",
+    "coordinate_frame": "J2000"
+  },
+  "capture_settings": {
+    "point_spacing_deg": 0.5,
+    "exposure_seconds": 5.0,
+    "gain": 0,
+    "binning": 1,
+    "exposures_per_point": 1,
+    "offset": 0,
+    "sequence_name": "deneb"
+  },
+  "capture_points": [
+    {
+      "ra": 276.31609135601036,
+      "dec": 74.83396642379223,
+      "index": 0,
+      "status": "captured",
+      "files": ["seq_0001_001.fits"],
+      "captured_at": "2026-03-24T18:43:12.646356+00:00"
+    },
+    {
+      "ra": 273.828603896364,
+      "dec": 74.97732072262272,
+      "index": 1,
+      "status": "pending",
+      "files": [],
+      "captured_at": null
+    },
+    {
+      "ra": 273.04131017248994,
+      "dec": 74.77333892119434,
+      "index": 2,
+      "status": "skipped",
+      "files": [],
+      "captured_at": null
+    },
+    {
+      "ra": 275.82101560295365,
+      "dec": 74.9036755558168,
+      "index": 3,
+      "status": "captured",
+      "files": ["seq_0004_001.fits", "seq_0004_002.fits"],
+      "captured_at": "2026-03-24T18:43:31.830968+00:00"
+    }
+  ],
+  "indi": null
+}

@@ -1,8 +1,9 @@
 """FITS file writer with sequence naming convention."""
 
+from datetime import UTC, datetime
 from pathlib import Path
 
-from src.models.project import CapturePoint
+from src.models.project import CapturedFrame, CapturePoint
 
 
 class FITSWriter:
@@ -17,16 +18,20 @@ class FITSWriter:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
-    def write(self, point: CapturePoint, exposure_num: int, data: bytes) -> Path:
+    def write(
+        self, point: CapturePoint, exposure_num: int, data: bytes, night: int = 1
+    ) -> Path:
         """Write FITS data for a capture point.
 
-        Updates point.files with the filename.
+        Appends a good CapturedFrame to point.frames, tagged with the
+        capture session's night number.
         Returns the full path of the written file.
 
         Args:
             point: The capture point to write data for.
             exposure_num: The 1-based exposure number.
             data: Raw FITS file bytes to write.
+            night: The capture session's night number for this frame.
 
         Returns:
             The full path of the written file.
@@ -34,5 +39,12 @@ class FITSWriter:
         name = point.filename(exposure_num)
         path = self.output_dir / name
         path.write_bytes(data)
-        point.files.append(name)
+        point.frames.append(
+            CapturedFrame(
+                filename=name,
+                status="good",
+                night=night,
+                captured_at=datetime.now(UTC),
+            )
+        )
         return path

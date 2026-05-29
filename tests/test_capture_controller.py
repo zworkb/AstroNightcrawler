@@ -11,6 +11,7 @@ import pytest
 from src.capture.controller import CaptureController, CaptureState
 from src.indi.mock import MockINDIClient
 from src.models.project import (
+    CapturedFrame,
     CapturePoint,
     CaptureSettings,
     ControlPoint,
@@ -95,7 +96,8 @@ async def test_run_full_sequence(tmp_path: Path) -> None:
     assert ctrl.state == CaptureState.COMPLETED
     for pt in project.capture_points:
         assert pt.status == "captured"
-        assert len(pt.files) == 1
+        assert pt.good_count == 1
+        assert pt.is_complete
 
 
 @pytest.mark.asyncio
@@ -136,19 +138,24 @@ async def test_multi_exposure(tmp_path: Path) -> None:
     await ctrl.run()
     assert ctrl.state == CaptureState.COMPLETED
     for pt in project.capture_points:
-        assert len(pt.files) == 3
+        assert pt.good_count == 3
 
 
 @pytest.mark.asyncio
-async def test_resume_skips_captured(tmp_path: Path) -> None:
-    """Pre-captured points are skipped during the run."""
+async def test_resume_skips_complete(tmp_path: Path) -> None:
+    """Pre-completed points are skipped during the run."""
     ctrl, _, project = await _make_controller(tmp_path, num_points=3)
+    # Mark point 0 complete with an existing good frame (resume scenario).
     project.capture_points[0].status = "captured"
+    project.capture_points[0].frames = [
+        CapturedFrame(filename="seq_0001_001.fits", status="good")
+    ]
     await ctrl.run()
     assert ctrl.state == CaptureState.COMPLETED
-    assert project.capture_points[0].files == []
-    assert project.capture_points[1].status == "captured"
-    assert project.capture_points[2].status == "captured"
+    # Point 0 was already complete -> no new frame captured for it.
+    assert project.capture_points[0].good_count == 1
+    assert project.capture_points[1].good_count == 1
+    assert project.capture_points[2].good_count == 1
 
 
 @pytest.mark.asyncio
@@ -190,6 +197,70 @@ async def test_manifest_written_on_completion(tmp_path: Path) -> None:
     assert manifest.exists()
     data = json.loads(manifest.read_text())
     assert data["project"] == "test"
+
+
+@pytest.mark.asyncio
+async def test_frames_tagged_with_night(tmp_path: Path) -> None:
+    """Frames written this run carry the controller's night number."""
+    ctrl, _, project = await _make_controller(tmp_path, num_points=2)
+    ctrl.night = 2
+    await ctrl.run()
+    assert ctrl.state == CaptureState.COMPLETED
+    for pt in project.capture_points:
+        assert pt.frames
+        assert all(f.night == 2 for f in pt.frames)
+
+
+@pytest.mark.asyncio
+async def test_multi_night_resume_increments_night(tmp_path: Path) -> None:
+    """Resuming an opened project tags new frames with night = next_night().
+
+    Point 0 already has a night-1 good frame (complete from a prior session),
+    point 1 is incomplete. A second run tags only the new frames night 2 and
+    leaves the complete point untouched.
+    """
+    ctrl, _, project = await _make_controller(tmp_path, num_points=2)
+    # Simulate point 0 captured on night 1, with its file present on disk so
+    # the run-start reconcile keeps it (the point stays complete).
+    (tmp_path / "seq_0001_001.fits").write_bytes(b"fake")
+    project.capture_points[0].status = "captured"
+    project.capture_points[0].frames = [
+        CapturedFrame(filename="seq_0001_001.fits", status="good", night=1)
+    ]
+    # New session: night number derived from existing frames (1) -> 2.
+    ctrl.night = project.next_night()
+    assert ctrl.night == 2
+
+    await ctrl.run()
+    assert ctrl.state == CaptureState.COMPLETED
+    # Complete point keeps its single night-1 frame, no new capture.
+    assert project.capture_points[0].good_count == 1
+    assert project.capture_points[0].frames[0].night == 1
+    # Incomplete point got a fresh night-2 frame.
+    assert project.capture_points[1].good_count == 1
+    assert project.capture_points[1].frames[0].night == 2
+
+
+@pytest.mark.asyncio
+async def test_reconcile_before_run_refills_missing(tmp_path: Path) -> None:
+    """A frame whose file is gone at run start is dropped and refilled."""
+    ctrl, _, project = await _make_controller(tmp_path, num_points=2)
+    # Point 0 looks complete in the manifest but its FITS file never made it
+    # to disk (deleted between opening and running).
+    project.capture_points[0].status = "captured"
+    project.capture_points[0].target_subs = 1
+    project.capture_points[0].frames = [
+        CapturedFrame(filename="seq_0001_001.fits", status="good", night=1)
+    ]
+    assert project.capture_points[0].is_complete
+    ctrl.night = project.next_night()  # = 2
+
+    await ctrl.run()
+    assert ctrl.state == CaptureState.COMPLETED
+    # Reconcile dropped the phantom frame, the point was re-captured this run.
+    assert project.capture_points[0].good_count == 1
+    assert project.capture_points[0].frames[0].night == 2
+    assert (tmp_path / "seq_0001_001.fits").exists()
 
 
 @pytest.mark.asyncio
