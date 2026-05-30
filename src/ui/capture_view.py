@@ -14,6 +14,7 @@ from src.ui.overlay_sync import refresh_overlay
 if TYPE_CHECKING:
     from src.app_state import AppState
     from src.capture.controller import CaptureController
+    from src.ui.bottom_panel import BottomPanelComponent
 
 
 class CaptureViewComponent:
@@ -27,6 +28,7 @@ class CaptureViewComponent:
         """Initialise capture view with empty UI references."""
         self._controller: CaptureController | None = None
         self._state: AppState | None = None
+        self._panel: BottomPanelComponent | None = None
         self._timer: ui.timer | None = None
         self._container: ui.row | None = None
         self._progress: ui.linear_progress | None = None
@@ -77,6 +79,7 @@ class CaptureViewComponent:
         self,
         controller: CaptureController,
         state: AppState | None = None,
+        panel: BottomPanelComponent | None = None,
     ) -> None:
         """Begin showing capture progress for the given controller.
 
@@ -85,10 +88,15 @@ class CaptureViewComponent:
             state: Optional shared AppState; when supplied, the overlay
                 is refreshed each timer tick so capture-point colors
                 track ``good_count`` / ``is_complete`` live (issue #143).
+            panel: Optional bottom panel; when supplied, ``panel.refresh()``
+                is called each timer tick so the capture-points table
+                reflects ``status`` / ``good_count`` updates live
+                during the run (issue #147 Fix B).
         """
         import logging
         self._controller = controller
         self._state = state
+        self._panel = panel
         total = len(controller.project.capture_points)
         logging.getLogger("capture").info(
             "Capture view started: %d points", total,
@@ -115,8 +123,16 @@ class CaptureViewComponent:
                 refresh_overlay(self._state)
             except Exception:  # noqa: BLE001
                 pass
+        # Final panel refresh so the capture-points table shows the
+        # terminal status (captured / skipped) without a reload (#147).
+        if self._panel is not None:
+            try:
+                self._panel.refresh()
+            except Exception:  # noqa: BLE001
+                pass
         self._controller = None
         self._state = None
+        self._panel = None
 
     def _update(self) -> None:
         """Periodic refresh of labels, progress bar, and button states."""
@@ -143,6 +159,15 @@ class CaptureViewComponent:
                 refresh_overlay(self._state)
             except Exception:  # noqa: BLE001
                 # Don't let an overlay glitch kill the capture timer.
+                pass
+        # Live capture-points-table refresh (issue #147 Fix B): the
+        # controller mutates point.status / frames in place; the panel's
+        # ``@ui.refreshable`` table needs a refresh tick to pick that up.
+        if self._panel is not None:
+            try:
+                self._panel.refresh()
+            except Exception:  # noqa: BLE001
+                # Don't let a panel render hiccup kill the timer either.
                 pass
 
     def _update_status(self, state: CaptureState) -> None:

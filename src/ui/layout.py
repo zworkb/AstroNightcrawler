@@ -10,7 +10,7 @@ from nicegui import app, ui
 
 from src.app_state import AppState
 from src.models.freehand import compute_handles, fit_bezier_to_points, rdp_simplify
-from src.models.project import ControlPoint, Coordinate, SplinePath
+from src.models.project import ControlPoint, Coordinate, Project, SplinePath
 from src.starmap.engine import StarMap
 from src.starmap.projection import azalt_to_radec
 from src.ui.bottom_panel import BottomPanelComponent
@@ -66,65 +66,101 @@ def _auto_save(state: AppState) -> None:
     )
 
 
-def create_layout() -> None:
-    """Build the full-page layout with toolbar, map, and panel."""
-    state = AppState()
+def _restore_state_from_storage(state: AppState, storage: Any) -> None:
+    """Restore ``state.project`` + ``state.project_dir`` from a storage dict.
 
-    # Restore project from server-side user storage if available
-    saved = app.storage.user.get("project")
+    Order matters (see issue #147): when a project is located on disk
+    (``opened_project_dir`` / ``project_dir`` in storage) AND its manifest
+    exists, the disk manifest is the source of truth — because
+    ``CaptureController._save_manifest`` writes ONLY to disk during a
+    capture run, so the session-storage snapshot is stale after a run
+    completes. Without a located project we fall back to the session-
+    storage snapshot exactly like before.
+
+    Args:
+        state: The fresh ``AppState`` to populate.
+        storage: A dict-like (e.g. ``app.storage.user``) holding the
+            ``project`` JSON snapshot, the ``project_dir`` binding and
+            (legacy) ``opened_project_dir``.
+    """
+    log = logging.getLogger("starmap")
+    # Backward compat: older sessions persisted the binding under
+    # ``opened_project_dir``; read it as fallback but only write the new
+    # ``project_dir`` key going forward so the old one decays naturally.
+    opened_dir = (
+        storage.get("project_dir")
+        or storage.get("opened_project_dir")
+    )
+
+    if opened_dir:
+        p = Path(opened_dir)
+        manifest_path = p / "manifest.json"
+        if manifest_path.exists():
+            # Disk manifest is authoritative for located projects — the
+            # capture controller writes here directly, bypassing session
+            # storage, so trusting the snapshot would resurrect a
+            # pre-capture view of the world (#147).
+            try:
+                state.project = Project.model_validate_json(
+                    manifest_path.read_text(),
+                )
+                state.project_dir = p
+                log.info(
+                    "Restored project from disk manifest %s "
+                    "(%d capture points)",
+                    manifest_path, len(state.project.capture_points),
+                )
+            except Exception:  # noqa: BLE001
+                log.warning(
+                    "Failed to load manifest from %s — continuing with "
+                    "default state", manifest_path, exc_info=True,
+                )
+                state.project_dir = p
+            else:
+                try:
+                    report = state.project.reconcile_with_disk(p)
+                    if report.removed_count:
+                        log.info(
+                            "Reconciled %d missing frame(s) against %s",
+                            report.removed_count, p,
+                        )
+                except Exception:  # noqa: BLE001
+                    log.warning(
+                        "Reconcile on restore failed for %s",
+                        p, exc_info=True,
+                    )
+            return
+
+        # Located binding exists but the directory/manifest is gone —
+        # clear the stale binding and fall through to the session-storage
+        # fallback so the user still gets a usable state.
+        storage["project_dir"] = None
+        log.info("Remembered project dir %s is gone — clearing binding", p)
+
+    # Unlocated project: session-storage snapshot is the only thing we have.
+    saved = storage.get("project")
     if saved:
-        logging.getLogger("starmap").info(
-            "Restoring project from storage (%d bytes)", len(saved),
+        log.info(
+            "Restoring project from session storage (%d bytes)", len(saved),
         )
         try:
             state.load_project_from_json(saved)
-            logging.getLogger("starmap").info(
+            log.info(
                 "Restored %d control points",
                 len(state.project.path.control_points),
             )
         except Exception:  # noqa: BLE001
-            logging.getLogger("starmap").warning(
+            log.warning(
                 "Failed to restore project from storage", exc_info=True,
             )
     else:
-        logging.getLogger("starmap").info("No saved project in storage")
+        log.info("No saved project in storage")
 
-    # Restore the project-dir binding so a re-opened project survives a
-    # reload: rebind the output directory and reconcile the restored frames
-    # against the files actually on disk. If the directory/manifest is gone,
-    # clear the stale binding and fall back to default behaviour.
-    #
-    # Backward compat: older sessions persisted this under
-    # ``opened_project_dir``; read it as fallback but only write the new
-    # ``project_dir`` key going forward so the old one decays naturally.
-    opened_dir = (
-        app.storage.user.get("project_dir")
-        or app.storage.user.get("opened_project_dir")
-    )
-    if opened_dir:
-        p = Path(opened_dir)
-        if (p / "manifest.json").exists():
-            state.project_dir = p
-            try:
-                report = state.project.reconcile_with_disk(p)
-                if report.removed_count:
-                    logging.getLogger("starmap").info(
-                        "Restored opened project %s — reconciled %d missing "
-                        "frame(s)", p, report.removed_count,
-                    )
-                else:
-                    logging.getLogger("starmap").info(
-                        "Restored opened project binding: %s", p,
-                    )
-            except Exception:  # noqa: BLE001
-                logging.getLogger("starmap").warning(
-                    "Reconcile on restore failed for %s", p, exc_info=True,
-                )
-        else:
-            app.storage.user["project_dir"] = None
-            logging.getLogger("starmap").info(
-                "Remembered project dir %s is gone — clearing binding", p,
-            )
+
+def create_layout() -> None:
+    """Build the full-page layout with toolbar, map, and panel."""
+    state = AppState()
+    _restore_state_from_storage(state, app.storage.user)
 
     # Welcome nudge: if neither a project nor a located directory was
     # restored, the user lands on an empty "Untitled" canvas with the
@@ -223,6 +259,14 @@ def create_layout() -> None:
 
     callbacks["project_loaded"] = _on_project_loaded
 
+    # Rewire the start_capture callback now that ``panel`` exists so the
+    # capture view can refresh the bottom panel live during the run (#147
+    # Fix B). ``_build_callbacks`` ran before ``panel`` was created.
+    async def _on_start_capture_with_panel() -> None:
+        await _start_capture(state, capture_view, panel)
+
+    callbacks["start_capture"] = _on_start_capture_with_panel
+
     _register_path_events(state, panel)
 
 
@@ -258,12 +302,16 @@ def _build_callbacks(
 async def _start_capture(
     state: AppState,
     capture_view: CaptureViewComponent,
+    panel: BottomPanelComponent | None = None,
 ) -> None:
     """Start the capture sequence.
 
     Args:
         state: Shared application state.
         capture_view: Capture view to show progress.
+        panel: Optional bottom panel; threaded into the capture view so
+            the capture-points table refreshes live during the run
+            (issue #147 Fix B).
     """
     try:
         controller = state.start_capture()
@@ -271,7 +319,7 @@ async def _start_capture(
             f"Starting capture: {len(controller.project.capture_points)} points,"
             f" client={type(state.indi_client).__name__}",
         )
-        capture_view.start(controller, state)
+        capture_view.start(controller, state, panel)
         await controller.run()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("capture").error(

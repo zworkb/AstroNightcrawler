@@ -326,6 +326,111 @@ def test_storage_migration_reads_legacy_key(
 
 
 # --------------------------------------------------------------------------- #
+# _restore_state_from_storage (issue #147 Fix A)                              #
+# --------------------------------------------------------------------------- #
+
+
+def test_restore_uses_disk_manifest_when_opened_dir_set(
+    tmp_path: Path,
+) -> None:
+    """Disk manifest beats session snapshot for located projects (#147).
+
+    A capture run mutates the manifest on disk via
+    ``CaptureController._save_manifest`` but does NOT touch session
+    storage. After a reload the restore logic must therefore trust the
+    disk manifest, not the now-stale session-storage snapshot.
+    """
+    from src.ui.layout import _restore_state_from_storage
+
+    # Fresh-on-disk: the fixture manifest has 4 capture points, one of
+    # which (index 0) carries a recorded frame -> good_count == 1.
+    proj_dir = _make_project_dir(tmp_path)
+
+    # Build a STALE session snapshot from a brand-new (empty-frames)
+    # project pointing at the same dir.
+    stale = AppState()
+    stale.project.project = "deneb"
+    # No control points / no capture points -> definitely "stale".
+    stale_snapshot = stale.project.model_dump_json()
+
+    storage: dict = {
+        "project": stale_snapshot,
+        "project_dir": str(proj_dir),
+    }
+
+    restored = AppState()
+    _restore_state_from_storage(restored, storage)
+
+    # Disk version (4 capture points) wins over the stale snapshot.
+    assert restored.project_dir == proj_dir
+    assert len(restored.project.capture_points) == 4
+    by_index = {cp.index: cp for cp in restored.project.capture_points}
+    # Disk fixture: point 0 has one frame, point 3 has two.
+    assert by_index[0].good_count == 1
+    assert by_index[3].good_count == 2
+    # Stale snapshot had no capture_points at all -> proves disk won.
+    assert restored.project.project == "deneb"
+
+
+def test_restore_uses_session_when_no_opened_dir(tmp_path: Path) -> None:
+    """Without ``project_dir`` the session snapshot is still the source.
+
+    Unlocated projects (Load-JSON-only) never touch disk, so the
+    session-storage snapshot is by definition the latest state and must
+    keep being honoured (regression guard for the previous behaviour).
+    """
+    from src.ui.layout import _restore_state_from_storage
+
+    # A non-trivial session snapshot: one control point so we can tell
+    # it apart from the empty default.
+    seeded = AppState()
+    seeded.project.path = SplinePath(control_points=[
+        ControlPoint(ra=12.3, dec=45.6),
+        ControlPoint(ra=23.4, dec=56.7),
+    ])
+    snapshot = seeded.project.model_dump_json()
+
+    storage: dict = {"project": snapshot}
+
+    restored = AppState()
+    _restore_state_from_storage(restored, storage)
+
+    assert restored.project_dir is None
+    assert len(restored.project.path.control_points) == 2
+    assert restored.project.path.control_points[0].ra == pytest.approx(12.3)
+
+
+def test_restore_clears_stale_binding_when_dir_gone(
+    tmp_path: Path,
+) -> None:
+    """A ``project_dir`` pointing at a vanished folder is cleared.
+
+    Falls back to the session-storage snapshot exactly like the
+    unlocated path so the user is not stranded.
+    """
+    from src.ui.layout import _restore_state_from_storage
+
+    missing = tmp_path / "does_not_exist"
+    seeded = AppState()
+    seeded.project.path = SplinePath(control_points=[
+        ControlPoint(ra=1.0, dec=2.0),
+        ControlPoint(ra=3.0, dec=4.0),
+    ])
+    storage: dict = {
+        "project": seeded.project.model_dump_json(),
+        "project_dir": str(missing),
+    }
+
+    restored = AppState()
+    _restore_state_from_storage(restored, storage)
+
+    # Binding cleared, session snapshot honoured.
+    assert storage["project_dir"] is None
+    assert restored.project_dir is None
+    assert len(restored.project.path.control_points) == 2
+
+
+# --------------------------------------------------------------------------- #
 # new_project (issue #141)                                                    #
 # --------------------------------------------------------------------------- #
 

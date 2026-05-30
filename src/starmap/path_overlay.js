@@ -397,7 +397,7 @@ window.pathOverlayBridge = (() => {
     //   partial  #f5c518  yellow - some good frames, not yet complete
     //   complete #52c46b  green - target_subs reached
     //
-    // Must match _display_status() in src/ui/overlay_sync.py.
+    // Must match display_status() in src/ui/overlay_sync.py.
     const CAPTURE_STATUS_COLORS = {
         skipped:  "#777777",
         open:     "#3aa7ff",

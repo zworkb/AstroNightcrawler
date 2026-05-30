@@ -487,9 +487,31 @@ class ToolbarComponent:
             })();
         """)
 
-    def _action(self, name: str) -> Callable[[], None]:
-        """Return the callback for *name*, or a no-op."""
-        return self.callbacks.get(name, lambda: None)
+    def _action(self, name: str) -> Callable[[], Any]:
+        """Return a stable async callable that resolves *name* at CLICK time.
+
+        Earlier this returned ``self.callbacks.get(name, ...)`` directly,
+        which snapshotted whatever was in the dict when the button was
+        rendered. ``layout.py`` patches some entries (``start_capture``,
+        ``project_loaded``) AFTER the toolbar renders to inject the
+        panel reference for live refresh — those overrides never reached
+        buttons that were already bound. Returning a late-binding closure
+        re-reads the dict on every click so the override path works.
+
+        The closure is ``async`` because some callbacks (notably
+        ``start_capture``) are coroutine functions: NiceGUI inspects the
+        handler with ``iscoroutinefunction``, and a sync wrapper that
+        merely returns a coroutine would silently swallow it. Making
+        ``_call`` itself async means NiceGUI awaits us, and we then
+        await the underlying callback if it returned a coroutine.
+        """
+        import inspect
+        async def _call() -> None:
+            cb = self.callbacks.get(name, lambda: None)
+            result = cb()
+            if inspect.iscoroutine(result):
+                await result
+        return _call
 
     def _mode_action(self, name: str) -> Callable[[], None]:
         """Return a callback that sets the drawing mode."""

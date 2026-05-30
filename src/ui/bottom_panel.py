@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from nicegui import ui
 
-from src.ui.overlay_sync import refresh_overlay
+from src.ui.overlay_sync import display_status, refresh_overlay
 
 if TYPE_CHECKING:
     from src.app_state import AppState
@@ -208,6 +208,14 @@ class BottomPanelComponent:
     def _build_table_rows(self) -> list[dict[str, object]]:
         """Build row data for the capture points table.
 
+        Status is derived live from frames + target_subs via
+        ``display_status`` (the same helper that drives the star-map
+        colors), NOT the legacy ``cp.status`` string field. The legacy
+        field freezes at the last controller mutation and stays
+        ``captured`` even after a file is reconciled away — using the
+        derived status keeps the table in sync with reality and
+        consistent with the map.
+
         Returns:
             List of row dicts with index, ra, dec, and status.
         """
@@ -216,7 +224,7 @@ class BottomPanelComponent:
                 "index": cp.index,
                 "ra": f"{cp.ra:.4f}",
                 "dec": f"{cp.dec:.4f}",
-                "status": cp.status,
+                "status": display_status(cp),
             }
             for cp in self.state.project.capture_points
         ]

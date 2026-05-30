@@ -97,7 +97,7 @@ def _serialize_control_points(
     return result
 
 
-def _display_status(p: CapturePoint) -> str:
+def display_status(p: CapturePoint) -> str:
     """Derive the on-map color category for a capture point.
 
     Skipped takes precedence over completeness so a skipped point that
@@ -126,7 +126,7 @@ def _serialize_capture_points(
     Converts stored RA/Dec to Az/Alt for JS toScreen().  Emits both the
     transient ``status`` (Literal field on the model, kept for backwards
     compat) and a derived ``display_status`` used by ``path_overlay.js``
-    to color the dot (see ``_display_status``).
+    to color the dot (see ``display_status``).
     """
     obs = _observer_from_camera(state.last_camera)
     result: list[dict[str, Any]] = []
@@ -137,6 +137,6 @@ def _serialize_capture_points(
             "dec": alt,
             "index": p.index,
             "status": p.status,
-            "display_status": _display_status(p),
+            "display_status": display_status(p),
         })
     return result
