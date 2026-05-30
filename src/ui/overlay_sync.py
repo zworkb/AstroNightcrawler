@@ -11,6 +11,7 @@ from src.starmap.projection import radec_to_azalt
 
 if TYPE_CHECKING:
     from src.app_state import AppState
+    from src.models.project import CapturePoint
 
 
 def refresh_overlay(state: AppState) -> None:
@@ -96,16 +97,46 @@ def _serialize_control_points(
     return result
 
 
+def _display_status(p: CapturePoint) -> str:
+    """Derive the on-map color category for a capture point.
+
+    Skipped takes precedence over completeness so a skipped point that
+    happens to have frames still reads as grey on the map.
+
+    Returns one of:
+        - "skipped"  -> grey (point.skipped is True)
+        - "complete" -> green (good_count >= target_subs)
+        - "partial"  -> yellow (0 < good_count < target_subs)
+        - "open"     -> blue (good_count == 0)
+    """
+    if p.skipped:
+        return "skipped"
+    if p.is_complete:
+        return "complete"
+    if p.good_count > 0:
+        return "partial"
+    return "open"
+
+
 def _serialize_capture_points(
     state: AppState,
 ) -> list[dict[str, Any]]:
     """Serialize capture points for the JS overlay.
 
-    Converts stored RA/Dec to Az/Alt for JS toScreen().
+    Converts stored RA/Dec to Az/Alt for JS toScreen().  Emits both the
+    transient ``status`` (Literal field on the model, kept for backwards
+    compat) and a derived ``display_status`` used by ``path_overlay.js``
+    to color the dot (see ``_display_status``).
     """
     obs = _observer_from_camera(state.last_camera)
     result: list[dict[str, Any]] = []
     for p in state.project.capture_points:
         az, alt = _to_azalt(p.ra, p.dec, obs)
-        result.append({"ra": az, "dec": alt, "index": p.index})
+        result.append({
+            "ra": az,
+            "dec": alt,
+            "index": p.index,
+            "status": p.status,
+            "display_status": _display_status(p),
+        })
     return result

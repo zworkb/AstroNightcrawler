@@ -382,8 +382,32 @@ window.pathOverlayBridge = (() => {
         }
     }
 
+    // ------------------------------------------------------------------
+    // Capture-point color map (issue #143)
+    // ------------------------------------------------------------------
+    //
+    // Picked for good contrast on the dark map background and to stay
+    // discriminable under mild color-vision deficiency (protanopia /
+    // deuteranopia): the three "alive" states span hue (blue / yellow /
+    // green) AND luminance, so they don't collapse to one tone when
+    // perceived as red-blind. Skipped is a neutral grey that recedes.
+    //
+    //   skipped  #777777  grey  - point deliberately skipped
+    //   open     #3aa7ff  blue  - no good frames yet
+    //   partial  #f5c518  yellow - some good frames, not yet complete
+    //   complete #52c46b  green - target_subs reached
+    //
+    // Must match _display_status() in src/ui/overlay_sync.py.
+    const CAPTURE_STATUS_COLORS = {
+        skipped:  "#777777",
+        open:     "#3aa7ff",
+        partial:  "#f5c518",
+        complete: "#52c46b",
+    };
+    const CAPTURE_DEFAULT_COLOR = CAPTURE_STATUS_COLORS.open;
+
     /**
-     * Render blue capture-point dots along the path.
+     * Render capture-point dots along the path, colored by status.
      * @private
      */
     function renderCapturePoints() {
@@ -392,13 +416,17 @@ window.pathOverlayBridge = (() => {
             const s = toScreen(cp.ra, cp.dec);
             if (!s) continue;
 
+            const fill = CAPTURE_STATUS_COLORS[cp.display_status]
+                || CAPTURE_DEFAULT_COLOR;
+
             const circle = svgEl("circle", {
                 cx: String(s.x),
                 cy: String(s.y),
                 r: "3",
-                fill: "#63b3ed",
-                opacity: "0.8",
+                fill,
+                opacity: "0.9",
                 "data-capture-index": String(i),
+                "data-capture-status": cp.display_status || "open",
             });
             svg.appendChild(circle);
         }

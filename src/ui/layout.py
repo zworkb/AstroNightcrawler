@@ -35,16 +35,34 @@ _HEAD_CSS = (
 
 
 def _auto_save(state: AppState) -> None:
-    """Save project + opened-project binding to server-side storage."""
+    """Save project to session storage and (if located) to disk manifest.
+
+    Session storage stays as a fallback for the not-yet-located state.
+    Once ``project_dir`` is set, the disk manifest is the source of truth
+    and is rewritten on every edit; format mirrors
+    ``CaptureController._save_manifest`` (``indent=2``) so opening the
+    project mid-edit doesn't churn the file.
+    """
+    log = logging.getLogger("starmap")
     data = state.project.model_dump_json()
     app.storage.user["project"] = data
-    app.storage.user["opened_project_dir"] = (
-        str(state.opened_project_dir) if state.opened_project_dir else None
+    app.storage.user["project_dir"] = (
+        str(state.project_dir) if state.project_dir else None
     )
-    logging.getLogger("starmap").info(
-        "Auto-saved project (%d control points, %d bytes, opened_dir=%s)",
+    if state.project_dir is not None:
+        try:
+            (state.project_dir / "manifest.json").write_text(
+                state.project.model_dump_json(indent=2),
+            )
+        except OSError:
+            log.warning(
+                "Manifest write to %s failed",
+                state.project_dir, exc_info=True,
+            )
+    log.info(
+        "Auto-saved project (%d control points, %d bytes, project_dir=%s)",
         len(state.project.path.control_points), len(data),
-        state.opened_project_dir,
+        state.project_dir,
     )
 
 
@@ -71,15 +89,22 @@ def create_layout() -> None:
     else:
         logging.getLogger("starmap").info("No saved project in storage")
 
-    # Restore the opened-project binding so a re-opened project survives a
+    # Restore the project-dir binding so a re-opened project survives a
     # reload: rebind the output directory and reconcile the restored frames
     # against the files actually on disk. If the directory/manifest is gone,
     # clear the stale binding and fall back to default behaviour.
-    opened_dir = app.storage.user.get("opened_project_dir")
+    #
+    # Backward compat: older sessions persisted this under
+    # ``opened_project_dir``; read it as fallback but only write the new
+    # ``project_dir`` key going forward so the old one decays naturally.
+    opened_dir = (
+        app.storage.user.get("project_dir")
+        or app.storage.user.get("opened_project_dir")
+    )
     if opened_dir:
         p = Path(opened_dir)
         if (p / "manifest.json").exists():
-            state.opened_project_dir = p
+            state.project_dir = p
             try:
                 report = state.project.reconcile_with_disk(p)
                 if report.removed_count:
@@ -96,10 +121,24 @@ def create_layout() -> None:
                     "Reconcile on restore failed for %s", p, exc_info=True,
                 )
         else:
-            app.storage.user["opened_project_dir"] = None
+            app.storage.user["project_dir"] = None
             logging.getLogger("starmap").info(
                 "Remembered project dir %s is gone — clearing binding", p,
             )
+
+    # Welcome nudge: if neither a project nor a located directory was
+    # restored, the user lands on an empty "Untitled" canvas with the
+    # path-mutating tools greyed out (see toolbar gating). The greyed
+    # tools are the primary visual cue; this notify is the backup hint
+    # so the user knows what to do next. Non-modal, persistent until
+    # dismissed.
+    if state.project_dir is None and not state.project.path.control_points:
+        ui.notify(
+            "Neues Projekt anlegen oder Projekt öffnen",
+            type="info",
+            timeout=0,
+            close_button=True,
+        )
 
     capture_view = CaptureViewComponent()
 
@@ -169,9 +208,17 @@ def create_layout() -> None:
     # Wire the panel refresh + persistence into the toolbar callbacks (same
     # dict the toolbar holds by reference) so loading/opening a project both
     # repopulates the Capture Points table AND persists the new state —
-    # including the opened-project binding — so it survives a reload.
+    # including the project_dir binding — so it survives a reload. The
+    # persistent project header is updated through the same hook so the
+    # caption tracks ``state.project_dir`` whenever a project is loaded
+    # or opened.
     def _on_project_loaded() -> None:
         panel.refresh()
+        # Single hook on the toolbar that refreshes the persistent header
+        # AND the tool-gating state (Pan stays on; path-mutating tools
+        # follow ``state.project_dir is not None``). Keeps the callback
+        # wiring stable when we add more project-state-dependent UI.
+        toolbar.refresh_project_state()
         _auto_save(state)
 
     callbacks["project_loaded"] = _on_project_loaded
@@ -224,7 +271,7 @@ async def _start_capture(
             f"Starting capture: {len(controller.project.capture_points)} points,"
             f" client={type(state.indi_client).__name__}",
         )
-        capture_view.start(controller)
+        capture_view.start(controller, state)
         await controller.run()
     except Exception as exc:  # noqa: BLE001
         logging.getLogger("capture").error(

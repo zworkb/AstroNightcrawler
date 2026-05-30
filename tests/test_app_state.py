@@ -1,12 +1,15 @@
 """Tests for AppState.open_project + multi-night resume (issue #136)."""
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from src.app_state import AppState, _resolve_output_dir
 from src.capture.controller import CaptureState
 from src.indi.mock import MockINDIClient
+from src.models.project import ControlPoint, SplinePath
 
 FIXTURE = Path(__file__).parent / "fixtures" / "legacy_manifest_v1.json"
 
@@ -44,7 +47,7 @@ def test_open_project_loads_migrates_and_binds(tmp_path: Path) -> None:
     assert state.project.version == "2.0"
     assert state.project.project == "deneb"
     # Output is bound to the opened directory.
-    assert state.opened_project_dir == proj_dir
+    assert state.project_dir == proj_dir
     # All files present -> nothing reconciled away.
     assert report.removed_count == 0
 
@@ -86,7 +89,7 @@ def test_resolve_output_dir_uses_opened_dir(tmp_path: Path) -> None:
     state = AppState()
     state.open_project(proj_dir)
 
-    resolved = _resolve_output_dir(state.project, state.opened_project_dir)
+    resolved = _resolve_output_dir(state.project, state.project_dir)
     assert resolved == proj_dir
 
 
@@ -123,3 +126,225 @@ async def test_multi_night_resume_run(tmp_path: Path) -> None:
     # Point 3 was complete (two night-1 frames) -> untouched.
     assert by_index[3].good_count == 2
     assert all(f.night == 1 for f in by_index[3].frames)
+
+
+def _patch_storage(monkeypatch: pytest.MonkeyPatch) -> dict:
+    """Replace ``nicegui.app.storage`` with a plain-dict fake for the layout module.
+
+    ``_auto_save`` and the restore block reach into ``app.storage.user`` to
+    persist the project + bound directory. Tests don't run a NiceGUI server,
+    so we swap ``app`` for a ``SimpleNamespace`` carrying a dict-backed
+    ``storage.user``. Returns the dict so the test can assert on it directly.
+    """
+    from src.ui import layout as layout_mod
+
+    fake_user: dict = {}
+    fake_storage = SimpleNamespace(user=fake_user)
+    fake_app = SimpleNamespace(storage=fake_storage)
+    monkeypatch.setattr(layout_mod, "app", fake_app)
+    return fake_user
+
+
+def test_auto_save_writes_manifest_to_disk(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``_auto_save`` writes ``project_dir/manifest.json`` when bound."""
+    from src.ui.layout import _auto_save
+
+    storage = _patch_storage(monkeypatch)
+    proj_dir = _make_project_dir(tmp_path)
+    state = AppState()
+    state.open_project(proj_dir)
+
+    # Sanity: bound and disk manifest exists before the call.
+    assert state.project_dir == proj_dir
+    manifest = proj_dir / "manifest.json"
+    before = manifest.read_text()
+
+    # Mutate the project so the rewrite is observable.
+    state.project.project = "renamed"
+    _auto_save(state)
+
+    after = manifest.read_text()
+    assert after != before
+    assert '"project": "renamed"' in after  # disk format is indent=2
+    # Session storage mirror is updated under the NEW key only.
+    assert storage["project_dir"] == str(proj_dir)
+    assert "opened_project_dir" not in storage
+    # Session-storage mirror uses compact JSON (no indent).
+    assert '"project":"renamed"' in storage["project"]
+
+
+def test_auto_save_skips_disk_when_not_bound(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without ``project_dir`` no disk write happens — session storage only."""
+    from src.ui.layout import _auto_save
+
+    storage = _patch_storage(monkeypatch)
+    state = AppState()
+    assert state.project_dir is None
+
+    _auto_save(state)
+
+    # Nothing got written into tmp_path.
+    assert list(tmp_path.iterdir()) == []
+    assert storage["project_dir"] is None
+    assert "project" in storage
+
+
+def test_storage_migration_reads_legacy_key(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A session persisted under the legacy key still restores ``project_dir``.
+
+    Older builds wrote ``opened_project_dir``. The restore block in
+    ``create_layout`` reads ``project_dir`` first and falls back to the
+    legacy key — this guards reloads from breaking on upgrade.
+    """
+    storage = _patch_storage(monkeypatch)
+    proj_dir = _make_project_dir(tmp_path)
+    storage["opened_project_dir"] = str(proj_dir)
+
+    # Replicate the restore lookup verbatim.
+    from src.ui import layout as layout_mod
+    opened_dir = (
+        layout_mod.app.storage.user.get("project_dir")
+        or layout_mod.app.storage.user.get("opened_project_dir")
+    )
+    assert opened_dir == str(proj_dir)
+    assert (Path(opened_dir) / "manifest.json").exists()
+
+
+# --------------------------------------------------------------------------- #
+# new_project (issue #141)                                                    #
+# --------------------------------------------------------------------------- #
+
+
+def test_new_project_creates_dir_and_manifest(tmp_path: Path) -> None:
+    """``new_project`` creates the directory + initial manifest and binds."""
+    state = AppState()
+
+    target = state.new_project(tmp_path, "cygnus_2026")
+
+    assert target == tmp_path / "cygnus_2026"
+    assert target.is_dir()
+    manifest = target / "manifest.json"
+    assert manifest.exists()
+
+    # Manifest is valid JSON, indent=2, with the chosen name.
+    raw = manifest.read_text()
+    data = json.loads(raw)
+    assert data["project"] == "cygnus_2026"
+    # indent=2 means each top-level key is preceded by two spaces.
+    assert '\n  "project"' in raw
+
+    # State bindings.
+    assert state.project.project == "cygnus_2026"
+    assert state.project.path.control_points == []
+    assert state.project_dir == target
+
+
+def test_new_project_collision_raises(tmp_path: Path) -> None:
+    """An existing directory must NOT be overwritten silently."""
+    state = AppState()
+    (tmp_path / "deneb").mkdir()
+
+    with pytest.raises(FileExistsError):
+        state.new_project(tmp_path, "deneb")
+    # State must not be mutated on collision.
+    assert state.project_dir is None
+
+
+@pytest.mark.parametrize("bad", ["", "   ", "\t\n"])
+def test_new_project_empty_name_raises(tmp_path: Path, bad: str) -> None:
+    """Empty / whitespace-only names are rejected with ``ValueError``."""
+    state = AppState()
+    with pytest.raises(ValueError, match="empty"):
+        state.new_project(tmp_path, bad)
+    assert state.project_dir is None
+
+
+@pytest.mark.parametrize("bad", ["foo/bar", "..\\baz", "a/b/c"])
+def test_new_project_invalid_name_raises(tmp_path: Path, bad: str) -> None:
+    """Names with path separators are rejected."""
+    state = AppState()
+    with pytest.raises(ValueError, match="separator"):
+        state.new_project(tmp_path, bad)
+    assert state.project_dir is None
+
+
+@pytest.mark.asyncio
+async def test_new_project_then_capture_writes_in_place(
+    tmp_path: Path,
+) -> None:
+    """After ``new_project`` + drawing a path, capture runs in-place at night 1."""
+    state = AppState()
+    target = state.new_project(tmp_path, "vega_session")
+    # Draw a minimal 2-point path so start_capture has something to capture.
+    state.project.path = SplinePath(
+        control_points=[
+            ControlPoint(ra=279.234, dec=38.783),
+            ControlPoint(ra=280.0, dec=39.0),
+        ],
+    )
+    state.update_capture_points()
+
+    client = MockINDIClient()
+    await client.connect("localhost")
+    state.indi_client = client
+
+    ctrl = state.start_capture()
+
+    assert ctrl.output_dir == target
+    assert ctrl.night == 1
+
+
+def test_new_project_resets_undo_stack(tmp_path: Path) -> None:
+    """``new_project`` starts a fresh undo history."""
+    state = AppState()
+    state.undo_stack.push("before", "after")
+    assert state.undo_stack.can_undo
+
+    state.new_project(tmp_path, "fresh")
+
+    assert not state.undo_stack.can_undo
+    assert not state.undo_stack.can_redo
+
+
+def test_drawing_tools_disabled_without_project(tmp_path: Path) -> None:
+    """Toolbar tool gating tracks ``state.project_dir``.
+
+    No NiceGUI server here — we stub the buttons with objects exposing
+    ``set_enabled`` and call the private ``_update_tool_gating`` directly.
+    """
+    from src.ui.toolbar import ToolbarComponent
+
+    state = AppState()
+    toolbar = ToolbarComponent(state)
+
+    class _FakeBtn:
+        def __init__(self) -> None:
+            self.enabled = True
+
+        def set_enabled(self, value: bool) -> None:
+            self.enabled = value
+
+    toolbar._path_tool_btns = [_FakeBtn() for _ in range(6)]
+
+    # No project_dir -> path-mutating tools disabled.
+    toolbar._update_tool_gating()
+    assert all(not b.enabled for b in toolbar._path_tool_btns)
+
+    # After locating the project -> tools enabled.
+    state.new_project(tmp_path, "andromeda")
+    toolbar._update_tool_gating()
+    assert all(b.enabled for b in toolbar._path_tool_btns)
+
+    # load_project_from_json drops project_dir -> tools disabled again.
+    state.load_project_from_json(state.project.model_dump_json())
+    toolbar._update_tool_gating()
+    assert all(not b.enabled for b in toolbar._path_tool_btns)

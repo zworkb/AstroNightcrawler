@@ -58,12 +58,54 @@ class ToolbarComponent:
             self._render_edit_tools()
             ui.separator().props("vertical")
             self._render_file_tools()
+            self._render_project_label()
             self._render_view_toggles()
             ui.space()
             self._render_action_tools()
 
+    def _project_caption(self) -> str:
+        """Return the caption for the persistent project header."""
+        p = self.state.project
+        if self.state.project_dir is None:
+            return f"Projekt: {p.project} (ungespeichert)"
+        return f"Projekt: {p.project} — {self.state.project_dir}"
+
+    def _render_project_label(self) -> None:
+        """Render the always-visible project name + path header."""
+        ui.separator().props("vertical").classes("mx-1")
+        self._proj_label = (
+            ui.label(self._project_caption())
+            .classes("text-sm text-grey-4 truncate")
+            .style("max-width:32rem")
+        )
+        self._proj_label.tooltip(
+            "Speicherort des aktuellen Projekts",
+        )
+
+    def refresh_project_label(self) -> None:
+        """Update the persistent project header to reflect current state."""
+        label = getattr(self, "_proj_label", None)
+        if label is not None:
+            label.text = self._project_caption()
+
+    def refresh_project_state(self) -> None:
+        """Sync all project-state-dependent UI: header + tool gating.
+
+        Single hook the ``project_loaded`` layout callback calls so we
+        don't have to thread two separate method names through the
+        layout wiring.
+        """
+        self.refresh_project_label()
+        self._update_tool_gating()
+
     def _render_drawing_tools(self) -> None:
-        """Render drawing tool buttons."""
+        """Render drawing tool buttons.
+
+        Pan stays always enabled (pure navigation, harmless without a
+        project). The six path-mutating tools (Draw, Freehand, Move,
+        Add Point, Remove Point, Split) are disabled until a project
+        is located on disk — see :meth:`_update_tool_gating`.
+        """
         tools = [
             ("pan_tool", "Pan"),
             ("draw", "Draw"),
@@ -73,6 +115,7 @@ class ToolbarComponent:
             ("remove_circle_outline", "Remove Point"),
             ("call_split", "Split"),
         ]
+        self._path_tool_btns: list[ui.button] = []
         for icon, tooltip in tools:
             name = tooltip.lower().replace(" ", "_")
             btn = ui.button(
@@ -80,6 +123,21 @@ class ToolbarComponent:
                 on_click=self._mode_action(name),
             ).props("flat dense")
             btn.tooltip(tooltip)
+            if name != "pan":
+                self._path_tool_btns.append(btn)
+        self._update_tool_gating()
+
+    def _update_tool_gating(self) -> None:
+        """Enable the path-mutating tools iff a project_dir is bound.
+
+        Called initially after rendering and again whenever the
+        ``project_loaded`` callback fires so the gating tracks New /
+        Open / Load-JSON transitions (Load-JSON drops ``project_dir``
+        and re-disables the tools, which is the intended behaviour).
+        """
+        enabled = self.state.project_dir is not None
+        for btn in getattr(self, "_path_tool_btns", []):
+            btn.set_enabled(enabled)
 
     def _render_edit_tools(self) -> None:
         """Render undo/redo buttons."""
@@ -116,6 +174,12 @@ class ToolbarComponent:
             on_click=self._on_load,
         ).props("flat dense")
         load_btn.tooltip("Load")
+
+        new_btn = ui.button(
+            icon="create_new_folder",
+            on_click=self._on_new_project,
+        ).props("flat dense")
+        new_btn.tooltip("Neues Projekt (Name + Ort)")
 
         open_btn = ui.button(
             icon="drive_folder_upload",
@@ -267,6 +331,98 @@ class ToolbarComponent:
         dialog.close()
         ui.notify("Project loaded", type="positive")
 
+        self._action("project_loaded")()
+        self._sync_overlay_from_camera()
+
+    async def _on_new_project(self) -> None:
+        """Open the New-Project dialog: name field + parent-folder picker.
+
+        Two stacked dialogs: an outer name dialog stays open while the
+        nested :class:`FolderBrowserDialog` is used to pick the parent
+        location. The folder browser closes itself on Select
+        (folder_browser.py:171), then the user confirms with "Create".
+        """
+        from src.config import settings
+        from src.ui.folder_browser import FolderBrowserDialog
+
+        # Default parent: configured output_dir (same default as Open).
+        parent_holder: dict[str, Path] = {"parent": Path(settings.output_dir)}
+
+        with ui.dialog() as dialog, ui.card().classes("w-96"):
+            ui.label("Neues Projekt").classes("text-lg font-bold")
+            name_input = ui.input(
+                label="Projektname",
+                placeholder="z.B. cygnus_2026",
+            ).classes("w-full")
+            parent_label = ui.label(
+                f"Ort: {parent_holder['parent']}",
+            ).classes("text-xs text-grey break-all")
+
+            def _pick_parent() -> None:
+                def _on_parent_selected(chosen: Path) -> None:
+                    parent_holder["parent"] = chosen
+                    parent_label.text = f"Ort: {chosen}"
+
+                browser = FolderBrowserDialog(on_select=_on_parent_selected)
+                browser.open(parent_holder["parent"])
+
+            ui.button(
+                "Ort wählen…",
+                icon="folder",
+                on_click=_pick_parent,
+            ).props("flat")
+
+            with ui.row().classes("w-full justify-end gap-2 mt-2"):
+                ui.button("Abbrechen", on_click=dialog.close).props("flat")
+                ui.button(
+                    "Anlegen",
+                    icon="create_new_folder",
+                    color="primary",
+                    on_click=lambda: self._handle_new_project(
+                        parent_holder["parent"],
+                        name_input.value or "",
+                        dialog,
+                    ),
+                )
+        dialog.open()
+
+    def _handle_new_project(
+        self,
+        parent: Path,
+        name: str,
+        dialog: ui.dialog,
+    ) -> None:
+        """Create the new project, refresh UI, and close the dialog.
+
+        Args:
+            parent: Parent directory chosen via the folder browser.
+            name: Project name entered by the user.
+            dialog: The outer name dialog (closed on success).
+        """
+        try:
+            self.state.new_project(parent, name)
+        except FileExistsError:
+            ui.notify(
+                "Verzeichnis existiert bereits — bitte anderen Namen wählen",
+                type="negative",
+            )
+            return
+        except ValueError as exc:
+            ui.notify(f"Ungültiger Name: {exc}", type="warning")
+            return
+        except OSError as exc:
+            ui.notify(
+                f"Konnte Projekt nicht anlegen: {exc}",
+                type="negative",
+            )
+            return
+
+        dialog.close()
+        ui.notify(
+            f"Projekt '{self.state.project.project}' angelegt",
+            type="positive",
+        )
+        # Same refresh hook Open uses: panel + header + gating + auto-save.
         self._action("project_loaded")()
         self._sync_overlay_from_camera()
 

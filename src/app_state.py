@@ -60,15 +60,22 @@ def _resolve_output_dir(
 ) -> Path:
     """Build output directory: base_dir / sequence_name.
 
-    When *opened_dir* is set (a project was opened via ``open_project``),
-    capture writes back into that exact directory so a subsequent run
-    continues the same project in place — no resume/counter logic is
-    needed because the state is already loaded.
+    When *opened_dir* is set (a project was opened via ``open_project``
+    or freshly created via ``new_project``), capture writes back into
+    that exact directory so a subsequent run continues the same project
+    in place — no resume/counter logic is needed because the state is
+    already loaded.
 
     Otherwise uses the sequence name from capture settings, or
     auto-generates one from the current datetime. If the directory
     already contains a manifest.json, resumes from the previous capture
     session. Otherwise, appends a counter if the directory already exists.
+
+    Note: the datetime/counter fallback path only kicks in for transient
+    un-located projects (``project_dir is None``). Once ``new_project``
+    or ``open_project`` has bound a directory, the *opened_dir* branch
+    above runs instead. Removing the fallback entirely (so every
+    capture requires an explicitly located project) is tracked in #142.
 
     Args:
         project: The project containing capture settings.
@@ -127,7 +134,7 @@ class AppState:
     project: Project = field(default_factory=_default_project)
     indi_client: INDIClient | None = None
     undo_stack: UndoStack = field(default_factory=UndoStack)
-    opened_project_dir: Path | None = None
+    project_dir: Path | None = None
     current_mode: str = "pan"
     last_camera: dict[str, float] = field(default_factory=lambda: {
         "canvas_width": 800, "canvas_height": 600,
@@ -195,7 +202,58 @@ class AppState:
         self.update_capture_points()
         self.undo_stack = UndoStack()
         # Loading a plain plan starts a new project, not a bound resume.
-        self.opened_project_dir = None
+        self.project_dir = None
+
+    def new_project(self, parent_dir: Path, name: str) -> Path:
+        """Create ``parent_dir/name`` as a fresh, located project.
+
+        Writes an initial ``manifest.json`` (``indent=2`` to match
+        ``CaptureController._save_manifest``), binds ``project_dir`` and
+        resets the undo stack so the project is ready to draw into from
+        the very first interaction. Symmetric to ``open_project``.
+
+        Args:
+            parent_dir: Directory to create the project folder inside.
+            name: Project folder name (also the project's display name).
+                Whitespace is stripped; path separators are rejected.
+
+        Returns:
+            The created project directory path.
+
+        Raises:
+            ValueError: If *name* is empty/whitespace-only or contains
+                a path separator (``/`` or ``\\``).
+            FileExistsError: If ``parent_dir/name`` already exists (we
+                refuse to overwrite an existing directory silently).
+        """
+        clean = (name or "").strip()
+        if not clean:
+            msg = "Project name must not be empty"
+            raise ValueError(msg)
+        if "/" in clean or "\\" in clean:
+            msg = f"Project name must not contain path separators: {clean!r}"
+            raise ValueError(msg)
+
+        target = parent_dir / clean
+        if target.exists():
+            msg = f"Directory already exists: {target}"
+            raise FileExistsError(msg)
+
+        target.mkdir(parents=True)
+        self.project = Project(
+            project=clean,
+            path=SplinePath(control_points=[]),
+        )
+        (target / "manifest.json").write_text(
+            self.project.model_dump_json(indent=2),
+        )
+        self.project_dir = target
+        self.undo_stack = UndoStack()
+
+        logging.getLogger("capture").info(
+            "Created new project %r at %s", clean, target,
+        )
+        return target
 
     def open_project(self, project_dir: Path) -> ReconcileReport:
         """Open an existing capture project from its directory.
@@ -227,7 +285,7 @@ class AppState:
 
         self.project = Project.model_validate_json(manifest_path.read_text())
         report = self.project.reconcile_with_disk(project_dir)
-        self.opened_project_dir = project_dir
+        self.project_dir = project_dir
         self.undo_stack = UndoStack()
 
         complete = sum(1 for p in self.project.capture_points if p.is_complete)
@@ -262,7 +320,7 @@ class AppState:
         # authoritative (and carry the loaded frames), so we must NOT
         # re-sample the spline here — that could drift coords and drop
         # captured frames. Only re-sample for in-app planning.
-        if self.opened_project_dir is None:
+        if self.project_dir is None:
             self.update_capture_points()
         if len(self.project.capture_points) < 2:
             msg = "Need at least 2 capture points"
@@ -278,7 +336,7 @@ class AppState:
             pt.frames = []
             pt.captured_at = None
             pt.target_subs = target
-        output = _resolve_output_dir(self.project, self.opened_project_dir)
+        output = _resolve_output_dir(self.project, self.project_dir)
         # Tag this session's frames with the next night number: one past the
         # highest night already recorded, so a multi-night resume keeps each
         # session's frames distinguishable. A fresh project starts at night 1.

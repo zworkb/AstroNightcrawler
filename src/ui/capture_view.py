@@ -9,8 +9,10 @@ from nicegui.elements.button import Button
 from nicegui.elements.label import Label
 
 from src.capture.controller import CaptureState
+from src.ui.overlay_sync import refresh_overlay
 
 if TYPE_CHECKING:
+    from src.app_state import AppState
     from src.capture.controller import CaptureController
 
 
@@ -24,6 +26,7 @@ class CaptureViewComponent:
     def __init__(self) -> None:
         """Initialise capture view with empty UI references."""
         self._controller: CaptureController | None = None
+        self._state: AppState | None = None
         self._timer: ui.timer | None = None
         self._container: ui.row | None = None
         self._progress: ui.linear_progress | None = None
@@ -70,14 +73,22 @@ class CaptureViewComponent:
             "Cancel", icon="cancel", on_click=self._on_cancel, color="red"
         ).props("dense")
 
-    def start(self, controller: CaptureController) -> None:
+    def start(
+        self,
+        controller: CaptureController,
+        state: AppState | None = None,
+    ) -> None:
         """Begin showing capture progress for the given controller.
 
         Args:
             controller: Active capture controller to monitor.
+            state: Optional shared AppState; when supplied, the overlay
+                is refreshed each timer tick so capture-point colors
+                track ``good_count`` / ``is_complete`` live (issue #143).
         """
         import logging
         self._controller = controller
+        self._state = state
         total = len(controller.project.capture_points)
         logging.getLogger("capture").info(
             "Capture view started: %d points", total,
@@ -97,7 +108,15 @@ class CaptureViewComponent:
         if self._timer is not None:
             self._timer.cancel()
             self._timer = None
+        # Final overlay refresh so points settle into their terminal
+        # colors (complete/partial/skipped) after the run finishes.
+        if self._state is not None:
+            try:
+                refresh_overlay(self._state)
+            except Exception:  # noqa: BLE001
+                pass
         self._controller = None
+        self._state = None
 
     def _update(self) -> None:
         """Periodic refresh of labels, progress bar, and button states."""
@@ -117,6 +136,14 @@ class CaptureViewComponent:
         self._update_counters()
         self._update_progress()
         self._highlight_current_point()
+        # Live overlay color sync (issue #143): re-emit cap_data so the
+        # JS picks up the latest good_count / is_complete per point.
+        if self._state is not None:
+            try:
+                refresh_overlay(self._state)
+            except Exception:  # noqa: BLE001
+                # Don't let an overlay glitch kill the capture timer.
+                pass
 
     def _update_status(self, state: CaptureState) -> None:
         """Update the status label text and colour based on state.
