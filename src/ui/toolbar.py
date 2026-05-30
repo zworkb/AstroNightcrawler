@@ -341,7 +341,7 @@ class ToolbarComponent:
         dialog.close()
         ui.notify("Project loaded", type="positive")
 
-        self._action("project_loaded")()
+        self._trigger("project_loaded")
         self._sync_overlay_from_camera()
 
     async def _on_new_project(self) -> None:
@@ -433,7 +433,7 @@ class ToolbarComponent:
             type="positive",
         )
         # Same refresh hook Open uses: panel + header + gating + auto-save.
-        self._action("project_loaded")()
+        self._trigger("project_loaded")
         self._sync_overlay_from_camera()
 
     async def _on_open_project(self) -> None:
@@ -470,7 +470,7 @@ class ToolbarComponent:
         # Repopulate the Capture Points table (refreshable) and redraw the
         # star-map overlay. The table refresh is separate from the overlay —
         # without it the path shows on the map but the table stays empty.
-        self._action("project_loaded")()
+        self._trigger("project_loaded")
         self._sync_overlay_from_camera()
 
     def _sync_overlay_from_camera(self) -> None:
@@ -486,6 +486,29 @@ class ToolbarComponent:
                 if (cam) emitEvent('camera_state_update', cam);
             })();
         """)
+
+    def _trigger(self, name: str) -> None:
+        """Synchronously fire the callback for *name* from a sync handler.
+
+        Used by ``_handle_open_project`` / ``_handle_upload`` /
+        ``_handle_new_project`` to invoke the ``project_loaded`` callback
+        (panel refresh + header refresh + auto-save). Resolves the dict
+        at call time so layout's late callback overrides are honored.
+
+        If the callback is a coroutine function, schedules it on the
+        running event loop via ``asyncio.ensure_future`` (fire-and-forget)
+        so the sync caller is not blocked.
+        """
+        import asyncio
+        import inspect
+        cb = self.callbacks.get(name, lambda: None)
+        result = cb()
+        if inspect.iscoroutine(result):
+            try:
+                asyncio.ensure_future(result)
+            except RuntimeError:
+                # No running loop — coroutine is silently dropped.
+                pass
 
     def _action(self, name: str) -> Callable[[], Any]:
         """Return a stable async callable that resolves *name* at CLICK time.
