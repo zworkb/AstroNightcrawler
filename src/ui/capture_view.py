@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from nicegui import ui
 from nicegui.elements.button import Button
@@ -30,6 +30,11 @@ class CaptureViewComponent:
         self._state: AppState | None = None
         self._panel: BottomPanelComponent | None = None
         self._timer: ui.timer | None = None
+        # Cache of the last capture-progress signature so we only fire
+        # the expensive overlay + table refresh when something actually
+        # changed. Reset to None in ``start`` so the first tick always
+        # refreshes once.
+        self._last_signature: tuple[Any, ...] | None = None
         self._container: ui.row | None = None
         self._progress: ui.linear_progress | None = None
         self._status_label: Label | None = None
@@ -97,6 +102,7 @@ class CaptureViewComponent:
         self._controller = controller
         self._state = state
         self._panel = panel
+        self._last_signature = None  # force one initial refresh
         total = len(controller.project.capture_points)
         logging.getLogger("capture").info(
             "Capture view started: %d points", total,
@@ -135,40 +141,68 @@ class CaptureViewComponent:
         self._panel = None
 
     def _update(self) -> None:
-        """Periodic refresh of labels, progress bar, and button states."""
+        """Periodic refresh of labels, progress bar, and button states.
+
+        Tick runs every 0.5 s. The cheap UI bits (status label, counters,
+        progress bar, current-point highlight) refresh every tick. The
+        expensive ones (full overlay JSON push + 87-row table re-render)
+        are gated on a change signature so they only fire when something
+        the user can actually see changed — otherwise long sequences
+        flood the WebSocket with redundant payloads and the browser
+        eventually drops the connection.
+        """
         if self._controller is None:
             return
         state = self._controller.state
         total = len(self._controller.project.capture_points)
         idx = self._controller.current_point_index
-        import logging
-        logging.getLogger("capture").info(
-            "UI update: state=%s point=%d/%d", state, idx, total,
-        )
         if state in (CaptureState.COMPLETED, CaptureState.CANCELLED):
             self.stop()
             return
+        # Cheap UI updates every tick — these don't go over the WS.
         self._update_status(state)
         self._update_counters()
         self._update_progress()
         self._highlight_current_point()
-        # Live overlay color sync (issue #143): re-emit cap_data so the
-        # JS picks up the latest good_count / is_complete per point.
-        if self._state is not None:
-            try:
-                refresh_overlay(self._state)
-            except Exception:  # noqa: BLE001
-                # Don't let an overlay glitch kill the capture timer.
-                pass
-        # Live capture-points-table refresh (issue #147 Fix B): the
-        # controller mutates point.status / frames in place; the panel's
-        # ``@ui.refreshable`` table needs a refresh tick to pick that up.
-        if self._panel is not None:
-            try:
-                self._panel.refresh()
-            except Exception:  # noqa: BLE001
-                # Don't let a panel render hiccup kill the timer either.
-                pass
+        # Heavy refreshes (overlay + table) only when capture state has
+        # actually advanced: a new point started, a new frame landed,
+        # a rejection / reconcile changed frame status, or the run
+        # transitioned (PAUSED <-> RUNNING). Most ticks during a slew
+        # / settle / long exposure produce no change worth re-rendering.
+        signature = self._progress_signature(state, idx)
+        if signature != self._last_signature:
+            self._last_signature = signature
+            if self._state is not None:
+                try:
+                    refresh_overlay(self._state)
+                except Exception:  # noqa: BLE001
+                    pass
+            if self._panel is not None:
+                try:
+                    self._panel.refresh()
+                except Exception:  # noqa: BLE001
+                    pass
+
+    def _progress_signature(
+        self, state: CaptureState, idx: int,
+    ) -> tuple[Any, ...]:
+        """Compact tuple summarising what the heavy refreshes care about.
+
+        Triggers a refresh on: current-point change, state transition,
+        any change to frame counts / statuses (good_count, rejected),
+        and skipped flag flips. Hashable + cheap to compute on every
+        tick — much cheaper than the refreshes it gates.
+        """
+        if self._controller is None:
+            return (state, idx)
+        return (
+            state,
+            idx,
+            tuple(
+                (p.good_count, len(p.frames), p.skipped)
+                for p in self._controller.project.capture_points
+            ),
+        )
 
     def _update_status(self, state: CaptureState) -> None:
         """Update the status label text and colour based on state.
