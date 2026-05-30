@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime
 from pathlib import Path
 
 from src.capture.controller import CaptureController
@@ -21,96 +20,24 @@ from src.models.spline import sample_points_along_spline
 from src.models.undo import UndoStack
 
 
-def _restore_from_manifest(project: Project, manifest_path: Path) -> None:
-    """Restore captured state from an existing manifest.
+def _resolve_output_dir(project_dir: Path) -> Path:
+    """Return the capture output directory, creating it if missing.
 
-    Routes the saved manifest through ``Project.model_validate_json`` so the
-    legacy migration validator and datetime parsing run automatically, then
-    merges captured frames into the current plan by point index. Points that
-    were complete (or skipped) in the previous session keep their frames so
-    the controller skips them.
-    """
-    saved = Project.model_validate_json(manifest_path.read_text())
-    saved_by_index = {sp.index: sp for sp in saved.capture_points}
-
-    for point in project.capture_points:
-        sp = saved_by_index.get(point.index)
-        if sp is None:
-            continue
-        if sp.skipped:
-            point.skipped = True
-            point.status = "skipped"
-            continue
-        if sp.frames:
-            point.frames = [f.model_copy(deep=True) for f in sp.frames]
-            point.target_subs = sp.target_subs
-            point.captured_at = sp.captured_at
-            if point.is_complete:
-                point.status = "captured"
-
-    captured = sum(1 for p in project.capture_points if p.is_complete)
-    logging.getLogger("capture").info(
-        "Resumed from manifest: %d/%d points already complete",
-        captured, len(project.capture_points),
-    )
-
-
-def _resolve_output_dir(
-    project: Project, opened_dir: Path | None = None,
-) -> Path:
-    """Build output directory: base_dir / sequence_name.
-
-    When *opened_dir* is set (a project was opened via ``open_project``
-    or freshly created via ``new_project``), capture writes back into
-    that exact directory so a subsequent run continues the same project
-    in place — no resume/counter logic is needed because the state is
-    already loaded.
-
-    Otherwise uses the sequence name from capture settings, or
-    auto-generates one from the current datetime. If the directory
-    already contains a manifest.json, resumes from the previous capture
-    session. Otherwise, appends a counter if the directory already exists.
-
-    Note: the datetime/counter fallback path only kicks in for transient
-    un-located projects (``project_dir is None``). Once ``new_project``
-    or ``open_project`` has bound a directory, the *opened_dir* branch
-    above runs instead. Removing the fallback entirely (so every
-    capture requires an explicitly located project) is tracked in #142.
+    Since #142 a project is its directory: ``new_project`` and
+    ``open_project`` both bind ``state.project_dir`` before any capture
+    runs, so capture always writes back into that exact directory.
+    There is no datetime/sequence-name fallback anymore — callers that
+    cannot supply a directory (e.g. Load JSON, which intentionally
+    clears ``project_dir``) must locate the project first.
 
     Args:
-        project: The project containing capture settings.
-        opened_dir: Directory of a project opened via ``open_project``,
-            or None for a brand-new project.
+        project_dir: The bound project directory.
 
     Returns:
-        Path to the created output directory.
+        ``project_dir`` (created if it did not exist).
     """
-    if opened_dir is not None:
-        opened_dir.mkdir(parents=True, exist_ok=True)
-        return opened_dir
-
-    base = Path(settings.output_dir)
-    seq_name = project.capture_settings.sequence_name.strip()
-    if not seq_name:
-        seq_name = datetime.now().strftime("%Y-%m-%d_%H%M")
-
-    output = base / seq_name
-
-    manifest_path = output / "manifest.json"
-    if manifest_path.exists():
-        # Resume: load manifest and restore point statuses
-        _restore_from_manifest(project, manifest_path)
-        return output
-
-    if output.exists():
-        # Directory exists but no manifest — append counter
-        counter = 2
-        while (base / f"{seq_name}_{counter}").exists():
-            counter += 1
-        output = base / f"{seq_name}_{counter}"
-
-    output.mkdir(parents=True, exist_ok=True)
-    return output
+    project_dir.mkdir(parents=True, exist_ok=True)
+    return project_dir
 
 
 def _default_project() -> Project:
@@ -312,16 +239,19 @@ class AppState:
 
         Raises:
             RuntimeError: If no INDI client is connected.
+            ValueError: If no ``project_dir`` is bound. Since #142 a
+                project must be located on disk (via New / Open) before
+                capture; Load-JSON-only plans are explicitly unsupported.
         """
         if self.indi_client is None:
             msg = "No INDI client connected. Use Connect first."
             raise RuntimeError(msg)
-        # For an opened project the manifest's capture_points are
-        # authoritative (and carry the loaded frames), so we must NOT
-        # re-sample the spline here — that could drift coords and drop
-        # captured frames. Only re-sample for in-app planning.
+        # A capture session needs a concrete on-disk destination. The
+        # UI mirrors this rule by disabling the Start Capture button
+        # while ``project_dir is None`` (see toolbar gating from #141).
         if self.project_dir is None:
-            self.update_capture_points()
+            msg = "Projekt zuerst anlegen oder öffnen"
+            raise ValueError(msg)
         if len(self.project.capture_points) < 2:
             msg = "Need at least 2 capture points"
             raise RuntimeError(msg)
@@ -336,7 +266,7 @@ class AppState:
             pt.frames = []
             pt.captured_at = None
             pt.target_subs = target
-        output = _resolve_output_dir(self.project, self.project_dir)
+        output = _resolve_output_dir(self.project_dir)
         # Tag this session's frames with the next night number: one past the
         # highest night already recorded, so a multi-night resume keeps each
         # session's frames distinguishable. A fresh project starts at night 1.

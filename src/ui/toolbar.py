@@ -128,16 +128,22 @@ class ToolbarComponent:
         self._update_tool_gating()
 
     def _update_tool_gating(self) -> None:
-        """Enable the path-mutating tools iff a project_dir is bound.
+        """Enable project-state-dependent controls iff a project_dir is bound.
 
-        Called initially after rendering and again whenever the
+        Path-mutating drawing tools AND the Start Capture button all
+        require a located project, so they share the same gate. Called
+        initially after rendering and again whenever the
         ``project_loaded`` callback fires so the gating tracks New /
         Open / Load-JSON transitions (Load-JSON drops ``project_dir``
-        and re-disables the tools, which is the intended behaviour).
+        and re-disables everything, which is the intended behaviour
+        from #142).
         """
         enabled = self.state.project_dir is not None
         for btn in getattr(self, "_path_tool_btns", []):
             btn.set_enabled(enabled)
+        start_btn = getattr(self, "_start_capture_btn", None)
+        if start_btn is not None:
+            start_btn.set_enabled(enabled)
 
     def _render_edit_tools(self) -> None:
         """Render undo/redo buttons."""
@@ -267,13 +273,17 @@ class ToolbarComponent:
 
     def _render_action_tools(self) -> None:
         """Render the start-capture and render buttons."""
-        btn = ui.button(
+        self._start_capture_btn = ui.button(
             "Start Capture",
             icon="play_arrow",
             on_click=self._action("start_capture"),
             color="green",
         )
-        btn.tooltip("Start Capture Sequence")
+        self._start_capture_btn.tooltip("Start Capture Sequence")
+        # Gating tracks project_dir: no located project -> no capture.
+        # Re-evaluated in _update_tool_gating once the project_loaded
+        # callback fires.
+        self._update_tool_gating()
 
         render_btn = ui.button(
             "Render",

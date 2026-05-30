@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
-from datetime import datetime
 from typing import TYPE_CHECKING
 
-from nicegui import app, ui
+from nicegui import ui
 
 from src.ui.overlay_sync import refresh_overlay
 
 if TYPE_CHECKING:
     from src.app_state import AppState
+
+
+# Auto-recompute debounce: keystrokes in number inputs fire ``on_change``
+# on every digit, but re-sampling the spline is cheap (numpy on a few
+# hundred points). 300 ms is comfortable for typing without feeling laggy
+# and matches the live-preview pattern used in the renderer (#110).
+_SETTINGS_DEBOUNCE_S = 0.3
 
 
 class BottomPanelComponent:
@@ -28,6 +34,7 @@ class BottomPanelComponent:
         """
         self.state = state
         self._expansion: ui.expansion | None = None
+        self._settings_timer: ui.timer | None = None
 
     def render(self) -> None:
         """Render the expansion panel with all sections."""
@@ -74,28 +81,41 @@ class BottomPanelComponent:
         )
         return (n * per_point) / 60.0
 
-    def _on_apply_settings(self) -> None:
-        """Recalculate capture points and refresh overlay."""
+    def _apply_settings(self) -> None:
+        """Recalculate capture points and refresh overlay + table.
+
+        Runs after the settings debounce expires (see
+        ``_schedule_settings_apply``). Cheap enough to re-run on every
+        settings tweak now that the Apply button is gone.
+        """
         self.state.update_capture_points()
         self.refresh()
         refresh_overlay(self.state)
-        app.storage.user["project"] = self.state.project.model_dump_json()
+        # Persist the settings change. ``_auto_save`` writes BOTH the
+        # session-storage snapshot AND (when ``project_dir`` is set) the
+        # disk manifest at the project's location — same path as a
+        # path-edit save, so settings changes survive a reload exactly
+        # like control-point moves do. Lazy import to avoid a circular
+        # (layout.py imports BottomPanelComponent).
+        from src.ui.layout import _auto_save
+        _auto_save(self.state)
 
-    def _render_sequence_name(self) -> None:
-        """Render sequence name input with auto-generated placeholder."""
-        cs = self.state.project.capture_settings
-        default = datetime.now().strftime("%Y-%m-%d_%H%M")
+    def _schedule_settings_apply(self) -> None:
+        """Debounce capture-point recomputation after a settings change.
 
-        def _on_change(e: object) -> None:
-            val = getattr(e, "value", "")
-            cs.sequence_name = val or ""
-
-        ui.input(
-            label="Sequence Name",
-            value=cs.sequence_name,
-            placeholder=f"auto ({default})",
-            on_change=_on_change,
-        ).classes("w-full")
+        Each settings input wires its ``on_change`` here. We cancel any
+        pending timer and queue a one-shot 300 ms timer so a burst of
+        keystrokes collapses to a single re-sample at the end.
+        """
+        timer = self._settings_timer
+        if timer is not None:
+            try:
+                timer.cancel()
+            except Exception:  # noqa: BLE001
+                pass
+        self._settings_timer = ui.timer(
+            _SETTINGS_DEBOUNCE_S, self._apply_settings, once=True,
+        )
 
     def _render_path_settings(self) -> None:
         """Render path and capture setting inputs."""
@@ -126,11 +146,6 @@ class BottomPanelComponent:
                 "Binning", cs.binning,
                 1, 4, 1, "binning", as_int=True,
             )
-            self._render_sequence_name()
-            ui.button(
-                "Apply", icon="check",
-                on_click=self._on_apply_settings,
-            ).props("dense color=primary size=sm")
 
     def _setting_number(
         self,
@@ -161,6 +176,10 @@ class BottomPanelComponent:
             if val is None:
                 return
             setattr(cs, a, int(val) if as_int else val)
+            # Auto-recompute (debounced) replaces the old Apply button —
+            # spacing/exposure/... tweaks update the capture points and
+            # overlay live, consistent with the renderer's live preview.
+            self._schedule_settings_apply()
 
         ui.number(
             label, value=value,

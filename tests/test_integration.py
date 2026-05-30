@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
-from unittest.mock import patch
 
 from src.app_state import AppState
 from src.capture.controller import CaptureState
@@ -72,10 +71,14 @@ async def test_full_capture_workflow(tmp_path: Path) -> None:
 
     await _connect_client(state)
 
+    # Since #142 capture always writes into ``state.project_dir`` — set it
+    # explicitly here to keep the integration test self-contained without
+    # going through new_project (which would create a real subdir under
+    # tmp_path; either is fine, this stays minimal).
     output_dir = tmp_path / "output"
-    with patch("src.app_state.settings") as mock_settings:
-        mock_settings.output_dir = str(output_dir)
-        controller = state.start_capture()
+    output_dir.mkdir()
+    state.project_dir = output_dir
+    controller = state.start_capture()
 
     await controller.run()
 
@@ -158,9 +161,9 @@ async def test_capture_pause_resume(tmp_path: Path) -> None:
     await _connect_client(state)
 
     output_dir = tmp_path / "output"
-    with patch("src.app_state.settings") as mock_settings:
-        mock_settings.output_dir = str(output_dir)
-        controller = state.start_capture()
+    output_dir.mkdir()
+    state.project_dir = output_dir
+    controller = state.start_capture()
 
     paused_observed = False
 
@@ -189,9 +192,9 @@ async def test_capture_with_retry(tmp_path: Path) -> None:
     await _connect_client(state)
 
     output_dir = tmp_path / "output"
-    with patch("src.app_state.settings") as mock_settings:
-        mock_settings.output_dir = str(output_dir)
-        controller = state.start_capture()
+    output_dir.mkdir()
+    state.project_dir = output_dir
+    controller = state.start_capture()
 
     await controller.run()
 
@@ -235,9 +238,9 @@ async def test_freehand_to_capture(tmp_path: Path) -> None:
     await _connect_client(state)
 
     output_dir = tmp_path / "output"
-    with patch("src.app_state.settings") as mock_settings:
-        mock_settings.output_dir = str(output_dir)
-        controller = state.start_capture()
+    output_dir.mkdir()
+    state.project_dir = output_dir
+    controller = state.start_capture()
 
     await controller.run()
 

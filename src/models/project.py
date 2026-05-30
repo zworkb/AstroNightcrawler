@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Coordinate(BaseModel):
@@ -60,6 +60,11 @@ class SplinePath(BaseModel):
 class CaptureSettings(BaseModel):
     """Global capture parameters for a sequence."""
 
+    # Silently drop legacy keys (e.g. ``sequence_name`` from pre-#142
+    # manifests) so old projects still load. The project directory is now
+    # the sole identity of a sequence — see #140/#141/#142.
+    model_config = ConfigDict(extra="ignore")
+
     point_spacing_deg: float = Field(
         default=0.5, description="Spacing between capture points in degrees"
     )
@@ -68,9 +73,6 @@ class CaptureSettings(BaseModel):
     binning: int = Field(default=1, description="Camera binning (1, 2, 3, or 4)")
     exposures_per_point: int = Field(default=1, ge=1, description="Exposures per capture point")
     offset: int = Field(default=0, ge=0, description="Camera offset setting")
-    sequence_name: str = Field(
-        default="", description="Sequence subfolder name (empty = auto from datetime)"
-    )
 
     @field_validator("binning")
     @classmethod

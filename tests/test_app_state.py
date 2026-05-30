@@ -89,8 +89,114 @@ def test_resolve_output_dir_uses_opened_dir(tmp_path: Path) -> None:
     state = AppState()
     state.open_project(proj_dir)
 
-    resolved = _resolve_output_dir(state.project, state.project_dir)
+    resolved = _resolve_output_dir(state.project_dir)
     assert resolved == proj_dir
+
+
+def test_resolve_output_dir_creates_missing(tmp_path: Path) -> None:
+    """``_resolve_output_dir`` creates the directory if it does not exist."""
+    target = tmp_path / "fresh_project"
+    assert not target.exists()
+
+    resolved = _resolve_output_dir(target)
+
+    assert resolved == target
+    assert target.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_start_capture_without_project_dir_raises(tmp_path: Path) -> None:
+    """Since #142, ``start_capture`` requires a located project on disk."""
+    state = AppState()
+    client = MockINDIClient()
+    await client.connect("localhost")
+    state.indi_client = client
+    # Plain plan (no project_dir bound) with ≥2 capture points.
+    state.project.path = SplinePath(control_points=[
+        ControlPoint(ra=10.0, dec=20.0),
+        ControlPoint(ra=11.0, dec=21.0),
+    ])
+    state.update_capture_points()
+    assert state.project_dir is None
+
+    with pytest.raises(ValueError, match="anlegen|öffnen"):
+        state.start_capture()
+
+
+def test_settings_change_recomputes_capture_points(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A spacing change schedules an apply that re-samples the capture points.
+
+    The panel's ``_setting_number`` callback writes the new value to the
+    capture settings and then debounces a call to ``_apply_settings``.
+    We stub ``ui.timer`` so the apply runs synchronously (the running
+    NiceGUI server isn't available in a unit test), and verify that
+    halving the spacing roughly doubles the number of capture points.
+    """
+    from src.ui import bottom_panel as bp_mod
+
+    state = AppState()
+    state.new_project(tmp_path, "spacing_test")
+    state.project.path = SplinePath(control_points=[
+        ControlPoint(ra=10.0, dec=20.0),
+        ControlPoint(ra=15.0, dec=20.0),
+    ])
+    state.project.capture_settings.point_spacing_deg = 1.0
+    state.update_capture_points()
+    initial = len(state.project.capture_points)
+    assert initial >= 2
+
+    panel = bp_mod.BottomPanelComponent(state)
+
+    # Stub ``ui.timer`` so ``_schedule_settings_apply`` runs the callback
+    # immediately — we're verifying the wiring, not the debounce itself.
+    class _FakeTimer:
+        def __init__(self, delay: float, cb, *, once: bool = False) -> None:
+            cb()
+
+        def cancel(self) -> None:
+            pass
+
+    monkeypatch.setattr(bp_mod.ui, "timer", _FakeTimer)
+    # Suppress NiceGUI storage/overlay side effects + the auto_save hook
+    # (lazily imported from layout.py — patch the layout module's symbol).
+    monkeypatch.setattr(
+        bp_mod, "refresh_overlay", lambda *_a, **_k: None,
+    )
+    from src.ui import layout as layout_mod
+    monkeypatch.setattr(layout_mod, "_auto_save", lambda *_a, **_k: None)
+    # Refresh would touch live UI elements; bypass it.
+    monkeypatch.setattr(panel, "refresh", lambda: None)
+
+    # Simulate spacing change: halve it, expect ~double the points.
+    state.project.capture_settings.point_spacing_deg = 0.5
+    panel._schedule_settings_apply()
+
+    after = len(state.project.capture_points)
+    assert after > initial
+
+
+def test_legacy_manifest_with_sequence_name_loads(tmp_path: Path) -> None:
+    """v1 manifests carrying ``sequence_name`` still load after #142.
+
+    The key was dropped from the model; ``extra="ignore"`` on
+    ``CaptureSettings`` silently discards it so existing manifests on
+    disk (e.g. output/deneb_21/manifest.json) keep working.
+    """
+    from src.models.project import Project
+
+    raw = FIXTURE.read_text()
+    assert '"sequence_name"' in raw  # fixture really carries the legacy key
+
+    project = Project.model_validate_json(raw)
+
+    # Loaded cleanly, migration ran (v1 -> v2), and the legacy field is gone.
+    assert project.version == "2.0"
+    assert not hasattr(project.capture_settings, "sequence_name")
+    # The migrated capture_settings still carry the real (kept) fields.
+    assert project.capture_settings.exposure_seconds == 5.0
 
 
 @pytest.mark.asyncio
