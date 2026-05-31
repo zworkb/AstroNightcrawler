@@ -72,7 +72,22 @@ def create_render_layout() -> None:
 
     with ui.column().classes("w-full p-4 gap-4"):
         _build_top_bar(state)
-        state.preview = ui.image().classes("w-full max-h-96 object-contain")
+        # Toggle row (issue #148): full-resolution preview for precise
+        # label placement on 8K frames. ``_apply_preview_mode`` swaps
+        # class strings + icon/tooltip to reflect the current mode.
+        with ui.row().classes("w-full justify-end items-center gap-2"):
+            state.preview_detail_button = ui.button(
+                icon="fullscreen",
+                on_click=lambda: _toggle_preview_detail(state),
+            ).props("flat dense round")
+        # Scrollable wrapper around the preview image. In detail mode the
+        # wrapper bounds the viewport (max-h-screen + overflow-auto) so a
+        # native-size frame can be scrolled; in compact mode the wrapper
+        # is a transparent passthrough and the image carries max-h-96.
+        with ui.element("div").classes("w-full") as wrapper:
+            state.preview_wrapper = wrapper
+            state.preview = ui.image().classes("object-contain")
+        _apply_preview_mode(state)
         # NiceGUI 3.x ignores dotted-path args ("target.naturalWidth"), so
         # we use a js_handler to explicitly bundle everything we need into
         # one emit() call. Otherwise the natural / displayed dimensions
@@ -1268,6 +1283,7 @@ _PERSISTED_FIELDS: tuple[str, ...] = (
     "align_sigma",
     "render_workers",
     "linear_pan_blend_tail",
+    "preview_detail_mode",
 )
 
 
@@ -1490,6 +1506,45 @@ def _toggle_click_to_add(state: _RenderState) -> None:
             state.preview.classes(remove="cursor-crosshair")
 
 
+def _apply_preview_mode(state: _RenderState) -> None:
+    """Apply the wrapper/image class strings for the current preview mode.
+
+    Detail mode: wrapper carries ``max-h-screen overflow-auto`` so the
+    image stays inside the viewport but scrolls if larger; image renders
+    at native size (``object-contain`` only, no width clamp).
+
+    Compact mode: wrapper is a passthrough; image is constrained to
+    ``w-full max-h-96`` — the pre-#148 behaviour.
+
+    Also updates the toggle button's icon + tooltip so the affordance
+    reflects the *next* action, not the current state.
+    """
+    wrapper = state.preview_wrapper
+    image = state.preview
+    button = state.preview_detail_button
+    if wrapper is None or image is None:
+        return
+    if state.preview_detail_mode:
+        wrapper.classes(replace="w-full max-h-screen overflow-auto")
+        image.classes(replace="object-contain")
+        if button is not None:
+            button.props("icon=fullscreen_exit")
+            button.tooltip("Kompakte Ansicht")
+    else:
+        wrapper.classes(replace="w-full")
+        image.classes(replace="w-full max-h-96 object-contain")
+        if button is not None:
+            button.props("icon=fullscreen")
+            button.tooltip("Vorschau in Vollauflösung")
+
+
+def _toggle_preview_detail(state: _RenderState) -> None:
+    """Flip the preview detail mode, re-apply classes, and persist."""
+    state.preview_detail_mode = not state.preview_detail_mode
+    _apply_preview_mode(state)
+    _save_render_state(state)
+
+
 def _handle_preview_click(state: _RenderState, event) -> None:
     """If click-to-add is active, treat the click as a label position.
 
@@ -1680,6 +1735,17 @@ class _RenderState:
         self.labels_panel: ui.expansion | None = None
         self.labels_list_container: ui.column | None = None
         self.click_to_add_active: bool = False
+        # Preview display mode (issue #148). False = compact (max-h-96,
+        # fast overview); True = detail (native size, scrollable — for
+        # pixel-precise label placement on high-res frames).
+        self.preview_detail_mode: bool = stored.get(
+            "preview_detail_mode", False,
+        )
+        # UI handles for the wrapper + toggle button, populated by
+        # ``create_render_layout``. ``_apply_preview_mode`` reads them
+        # to switch class strings + button icon/tooltip on demand.
+        self.preview_wrapper: ui.element | None = None
+        self.preview_detail_button: ui.button | None = None
 
 
 async def _load(state: _RenderState) -> None:
