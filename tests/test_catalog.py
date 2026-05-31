@@ -110,3 +110,58 @@ def test_load_catalog_caches_singleton(tmp_path, monkeypatch):
     first = load_catalog()
     second = load_catalog()
     assert first is second  # cache hit returns the same object
+
+
+def test_load_catalog_picks_up_tier_files(tmp_path, monkeypatch):
+    """When tier add-on CSVs exist next to the base, their rows merge in."""
+    csv_path = tmp_path / "catalog.csv"
+    _write_tiny_catalog(csv_path)
+    # Tier 1: Sh2-style row.
+    tier1_path = tmp_path / "catalog_tier1.csv"
+    with tier1_path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(
+            fh,
+            fieldnames=["id", "name", "ra", "dec", "mag", "type", "catalog"],
+        )
+        w.writeheader()
+        w.writerow({
+            "id": "Sh2-155", "name": "Cave Nebula",
+            "ra": "343.117", "dec": "62.617",
+            "mag": "0.00", "type": "EmN", "catalog": "Sh2",
+        })
+    # Tier 3: a UGC galaxy.
+    tier3_path = tmp_path / "catalog_tier3.csv"
+    with tier3_path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(
+            fh,
+            fieldnames=["id", "name", "ra", "dec", "mag", "type", "catalog"],
+        )
+        w.writeheader()
+        w.writerow({
+            "id": "UGC 12158", "name": "UGC 12158",
+            "ra": "340.412", "dec": "4.581",
+            "mag": "14.20", "type": "Gxy", "catalog": "UGC",
+        })
+    monkeypatch.setattr(catalog_mod, "_CATALOG_PATH", csv_path)
+    rows = load_catalog()
+    ids = {r["id"] for r in rows}
+    assert {"M27", "Sh2-155", "UGC 12158"}.issubset(ids)
+
+
+def test_load_catalog_explicit_path_skips_tier_glob(tmp_path):
+    """When the caller passes an explicit CSV path, no tier merging happens."""
+    csv_path = tmp_path / "catalog.csv"
+    _write_tiny_catalog(csv_path)
+    tier1_path = tmp_path / "catalog_tier1.csv"
+    with tier1_path.open("w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(
+            fh,
+            fieldnames=["id", "name", "ra", "dec", "mag", "type", "catalog"],
+        )
+        w.writeheader()
+        w.writerow({
+            "id": "Sh2-155", "name": "Cave", "ra": "343.117", "dec": "62.617",
+            "mag": "0.00", "type": "EmN", "catalog": "Sh2",
+        })
+    rows = load_catalog(csv_path)
+    assert {r["id"] for r in rows} == {"M27", "NGC 6960", "Vega"}

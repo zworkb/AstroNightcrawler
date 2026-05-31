@@ -235,6 +235,21 @@ git diff data/catalog.csv  # review what changed
 Requires internet (downloads from raw.githubusercontent.com/mattiaverga/OpenNGC
 and pas.rochester.edu/~emamajek/WGSN/).
 
+#### Optional add-on catalogs
+
+For deeper coverage, three opt-in tiers can be fetched from VizieR.
+The output files (`data/catalog_tier{1,2,3}.csv`) are **not** committed —
+each user fetches the tier(s) they need. `load_catalog()` picks them up
+automatically once present.
+
+```bash
+make tier-1   # Sharpless 2 + Barnard dark nebulae + Arp Peculiar Galaxies (~1.3k rows, ~70 KB)
+make tier-2   # (placeholder — vdB / Collinder / HCG sources still to add)
+make tier-3   # UGC galaxies (~13k rows, ~680 KB)
+```
+
+To uninstall a tier just delete its CSV: `rm data/catalog_tier3.csv`.
+
 ## Documentation
 
 - [Sky Path Cinematography — Genre & Prior Art](docs/related-work.md)

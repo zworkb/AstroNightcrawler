@@ -47,3 +47,7 @@ requirements-mxdev.txt
 
 # Local-only notebooks
 notebooks/artemis2/
+
+# Optional sky-catalog tiers fetched via `make tier-{1,2,3}` —
+# the base data/catalog.csv stays committed; tier add-ons are opt-in.
+data/catalog_tier*.csv

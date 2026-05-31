@@ -2,7 +2,7 @@ NC_HOST ?= 0.0.0.0
 NC_PORT ?= 8090
 SKYDATA_URL ?= https://stellarium-web.org/skydata
 
-.PHONY: run-capture run-render skydata skydata-extra skydata-dso skydata-stars-deep self-heal-venv build-catalog
+.PHONY: run-capture run-render skydata skydata-extra skydata-dso skydata-stars-deep self-heal-venv build-catalog tier-1 tier-2 tier-3
 
 # Self-heal the venv if its Python build doesn't match $(UV_PYTHON) (#150).
 # Runs every invocation, but only deletes when a mismatch is detected. The
@@ -111,3 +111,21 @@ build-catalog: install-render
 	@.venv/bin/python scripts/build_catalog.py
 	@echo "Catalog regenerated at data/catalog.csv"
 	@wc -l data/catalog.csv
+
+## Optional add-on catalogs fetched from VizieR. The output files
+## (data/catalog_tier{1,2,3}.csv) are git-ignored — each user runs the
+## tier(s) they want. load_catalog() picks them up automatically.
+##   tier-1: detailed nebulae & galaxies (Sh2 + Barnard + Arp, ~800 rows)
+##   tier-2: reflection nebulae & open clusters (TODO)
+##   tier-3: large/faint extended objects (UGC galaxies, ~12k rows)
+tier-1: install-render
+	@.venv/bin/python scripts/build_catalog.py --tier 1
+	@wc -l data/catalog_tier1.csv
+
+tier-2: install-render
+	@.venv/bin/python scripts/build_catalog.py --tier 2
+	@wc -l data/catalog_tier2.csv
+
+tier-3: install-render
+	@.venv/bin/python scripts/build_catalog.py --tier 3
+	@wc -l data/catalog_tier3.csv
