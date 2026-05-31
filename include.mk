@@ -2,12 +2,37 @@ NC_HOST ?= 0.0.0.0
 NC_PORT ?= 8090
 SKYDATA_URL ?= https://stellarium-web.org/skydata
 
-.PHONY: run-capture run-render skydata skydata-extra skydata-dso skydata-stars-deep
+.PHONY: run-capture run-render skydata skydata-extra skydata-dso skydata-stars-deep self-heal-venv
 
-run-render: install-render .env
-	PYTHON_GIL=0 python -c "from src.renderer.cli import main; main(['--ui'])"
-run-capture: install-capture .env skydata
-	NC_HOST=$(NC_HOST) NC_PORT=$(NC_PORT) python -c "from src.main import main; main()"
+# Self-heal the venv if its Python build doesn't match $(UV_PYTHON) (#150).
+# Runs every invocation, but only deletes when a mismatch is detected. The
+# MXENV_TARGET sentinel rule (Makefile, same logic) covers the case where the
+# sentinel is stale; this phony target covers the case where the user broke
+# the venv manually (e.g. `uv venv -p 3.13`) without invalidating the sentinel.
+self-heal-venv:
+	@if [ -d .venv ]; then \
+		EXISTING=$$(.venv/bin/python -c "import sysconfig; print('t' if sysconfig.get_config_var('Py_GIL_DISABLED') else 'no')" 2>/dev/null || true); \
+		WANTED=$$(echo "$(UV_PYTHON)" | grep -qE 't$$' && echo t || echo no); \
+		if [ -n "$$EXISTING" ] && [ "$$EXISTING" != "$$WANTED" ]; then \
+			echo "WARNING: .venv Python build ($$EXISTING) != UV_PYTHON=$(UV_PYTHON) ($$WANTED) — rebuilding (#150)"; \
+			rm -rf .venv .mxmake/sentinels/mxenv.sentinel; \
+		fi; \
+	fi
+
+# run-render REQUIRES a free-threaded build because it sets PYTHON_GIL=0 for
+# parallel alignment / stretch workers. Assert before launching to surface a
+# clear repair hint instead of `Fatal Python error: config_read_gil`.
+run-render: self-heal-venv install-render .env
+	@.venv/bin/python -c "import sysconfig; assert sysconfig.get_config_var('Py_GIL_DISABLED'), \
+'.venv ist kein free-threaded Python build. PYTHON_GIL=0 funktioniert nicht. Repair: rm -rf .venv .mxmake/sentinels/mxenv.sentinel && make install-render'"
+	PYTHON_GIL=0 .venv/bin/python -c "from src.renderer.cli import main; main(['--ui'])"
+
+# run-capture is Python-build-agnostic: capture has no parallel hot path, so
+# it works with BOTH regular and free-threaded Python. No PYTHON_GIL=0, no
+# free-threaded assertion — that way the Pi (UV_PYTHON=3.13) and the
+# workstation (UV_PYTHON=3.13t) both run capture without any rebuild churn.
+run-capture: self-heal-venv install-capture .env skydata
+	NC_HOST=$(NC_HOST) NC_PORT=$(NC_PORT) .venv/bin/python -c "from src.main import main; main()"
 
 .env:
 	@cp .env.example .env

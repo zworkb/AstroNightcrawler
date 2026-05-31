@@ -331,6 +331,22 @@ endif
 ifeq ("$(VENV_ENABLED)", "true")
 ifeq ("$(VENV_CREATE)", "true")
 ifeq ("$(USE_GLOBAL_UV)","true")
+	# ---- BEGIN HAND-EDIT (issue #150) — re-apply after `mxmake update` ----
+	# Self-heal: if an existing venv was built with a different Python
+	# (free-threaded vs regular), `uv venv --allow-existing` would silently
+	# keep the wrong interpreter and cause `Fatal Python error: config_read_gil`
+	# at run-time. Detect mismatch and nuke the venv so the seed step below
+	# rebuilds with the right interpreter. Triggers ONLY on mismatch —
+	# idempotent for repeated installs with consistent UV_PYTHON.
+	@if [ -d $(VENV_FOLDER) ]; then \
+		EXISTING=$$($(VENV_FOLDER)/bin/python -c "import sysconfig; print('t' if sysconfig.get_config_var('Py_GIL_DISABLED') else 'no')" 2>/dev/null || true); \
+		WANTED=$$(echo "$(UV_PYTHON)" | grep -qE 't$$' && echo t || echo no); \
+		if [ -n "$$EXISTING" ] && [ "$$EXISTING" != "$$WANTED" ]; then \
+			echo "WARNING: existing $(VENV_FOLDER) Python build ($$EXISTING) does not match UV_PYTHON=$(UV_PYTHON) ($$WANTED) — rebuilding (#150)"; \
+			rm -rf $(VENV_FOLDER); \
+		fi; \
+	fi
+	# ---- END HAND-EDIT (issue #150) ----
 	@echo "Setup Python Virtual Environment using global uv at '$(VENV_FOLDER)'"
 	@uv venv --allow-existing --no-progress -p $(UV_PYTHON) --seed $(VENV_FOLDER)
 else

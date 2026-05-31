@@ -48,6 +48,38 @@ QA toolchain — ruff, mypy, pytest, etc.):
 make install
 ```
 
+## Python Build (Free-Threaded vs Regular)
+
+The default `UV_PYTHON` is `3.13t` (free-threaded), which the parallel
+renderer relies on (`PYTHON_GIL=0`, see #117). On machines where
+free-threading is problematic (e.g. Raspberry Pi without a manually
+compiled libxml), override per machine in your shell:
+
+```bash
+# ~/.bashrc on the Pi:
+export UV_PYTHON=3.13
+```
+
+`uv`'s resolution order is `UV_PYTHON` env var > `.python-version` file >
+`pyproject.toml`, so this override wins over the committed
+`.python-version=3.13t`.
+
+The Makefile auto-detects venv/build mismatches and rebuilds when needed
+— but **only** when the build differs. Repeated `make install-*` and
+`make run-*` calls with a consistent `UV_PYTHON` do NOT trigger
+rebuilds. `make run-capture` works with either build; `make run-render`
+requires the free-threaded build.
+
+### Repair when the venv has the wrong Python
+
+The self-heal (#150) catches this automatically on the next
+`make install-*` / `make run-*`. If you want to force it manually:
+
+```bash
+rm -rf .venv .mxmake/sentinels/mxenv.sentinel
+make install-render   # or install-capture
+```
+
 ## Quick Start
 
 ### Planner & Capture
