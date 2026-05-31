@@ -84,10 +84,38 @@ def create_render_layout() -> None:
         # wrapper bounds the viewport (max-h-screen + overflow-auto) so a
         # native-size frame can be scrolled; in compact mode the wrapper
         # is a transparent passthrough and the image carries max-h-96.
+        #
+        # We also stack a transparent catalog-overlay div over the image
+        # (issue #152): the overlay carries a vanilla-JS pointermove +
+        # click handler that does the nearest-object search client-side.
+        # The overlay sits inside the wrapper so it follows scroll/resize
+        # naturally; ``pointer-events: none`` keeps the underlying click
+        # handler (manual Add-label) reachable when catalog mode is off.
         with ui.element("div").classes("w-full") as wrapper:
             state.preview_wrapper = wrapper
-            state.preview = ui.image().classes("object-contain")
+            # Inner relatively-positioned container so the absolute
+            # overlay aligns to the rendered image, not to the wrapper
+            # padding.
+            with ui.element("div").classes("relative") as preview_stack:
+                state.preview = ui.image().classes("object-contain")
+                state.catalog_overlay_id = f"cat-overlay-{id(state)}"
+                state.catalog_overlay = ui.element("div").props(
+                    f"id={state.catalog_overlay_id}",
+                ).classes(
+                    "absolute inset-0 pointer-events-none",
+                )
+            del preview_stack  # only used for the with-context
         _apply_preview_mode(state)
+        # Inject the catalog-overlay script once per page. Mirrors the
+        # histogram-overlay pattern (#111) — the JS lives in
+        # ``_catalog_overlay_script`` and is parameterised by the
+        # overlay id so multiple instances would coexist cleanly.
+        ui.add_body_html(_catalog_overlay_script(state.catalog_overlay_id))
+
+        def _on_catalog_click(e) -> None:  # noqa: ANN001 — NiceGUI event
+            _handle_catalog_click(state, e)
+
+        ui.on("catalog_label_click", _on_catalog_click)
         # NiceGUI 3.x ignores dotted-path args ("target.naturalWidth"), so
         # we use a js_handler to explicitly bundle everything we need into
         # one emit() call. Otherwise the natural / displayed dimensions
@@ -1271,6 +1299,7 @@ _APP_PERSISTED_FIELDS: tuple[str, ...] = (
     "output_path",
     "render_workers",
     "preview_detail_mode",
+    "catalog_mode_active",
 )
 
 # Per-project fields — serialised into ``manifest.json`` via
@@ -1457,15 +1486,25 @@ def _build_labels_panel(state: _RenderState) -> None:
         with ui.column().classes("w-full gap-1"):
             state.labels_list_container = ui.column().classes("w-full gap-1")
             with ui.row().classes("w-full justify-end gap-2"):
-                ui.button(
-                    "Catalog…", icon="search",
-                    on_click=lambda: _open_catalog_popover(state),
-                ).props("dense flat")
+                # Issue #152: catalog-mode toggle replaces the old manual
+                # catalog popover (delete). When active, the JS overlay
+                # captures hover/click on the preview and emits a
+                # ``catalog_label_click`` event with the nearest catalog
+                # object's id/ra/dec. The Add-label button is unchanged
+                # and remains a separate code path.
+                state.catalog_mode_button = ui.button(
+                    "Catalog mode", icon="search",
+                    on_click=lambda: _toggle_catalog_mode(state),
+                ).props("dense flat").tooltip(
+                    "Catalog click mode — Hover zeigt nähstes Objekt, "
+                    "Klick platziert Label",
+                )
                 ui.button(
                     "Add label", icon="add",
                     on_click=lambda: _toggle_click_to_add(state),
                 ).props("dense flat")
         _refresh_labels_list(state)
+        _apply_catalog_mode_button(state)
 
 
 def _refresh_labels_list(state: _RenderState) -> None:
@@ -1548,81 +1587,452 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
     dialog.open()
 
 
-def _open_catalog_popover(state: _RenderState) -> None:
-    """Add a label by entering its sky coordinates instead of clicking."""
-    if not state.pipeline or not state.pipeline.project:
-        ui.notify("Load a capture first", type="warning")
+def _toggle_catalog_mode(state: _RenderState) -> None:
+    """Flip the catalog-mode toggle and push the new state to the overlay.
+
+    Active = JS overlay grabs pointermove + click, shows the
+    floating tooltip with the nearest catalog object, and emits
+    ``catalog_label_click`` on click. Inactive = overlay is
+    transparent and pointer-events-none, so all clicks fall through
+    to the underlying preview image and the existing Add-label
+    behaviour is untouched (issue #152).
+    """
+    state.catalog_mode_active = not state.catalog_mode_active
+    _save_render_state(state)
+    _apply_catalog_mode_button(state)
+    _push_catalog_overlay_state(state)
+    # Refresh the FOV-slice for the currently-selected frame so the
+    # overlay has data on first enable.
+    if state.catalog_mode_active:
+        _refresh_catalog_fov_slice(state)
+
+
+def _apply_catalog_mode_button(state: _RenderState) -> None:
+    """Visually highlight the catalog-mode button when active."""
+    btn = state.catalog_mode_button
+    if btn is None:
         return
-    project = state.pipeline.project
-    if not project.capture_points:
-        ui.notify("No capture points in manifest", type="warning")
+    try:
+        if state.catalog_mode_active:
+            btn.props("dense color=primary")
+        else:
+            btn.props("dense flat")
+    except RuntimeError:
+        # Client closed mid-update — safe to ignore.
+        pass
+
+
+def _push_catalog_overlay_state(state: _RenderState) -> None:
+    """Tell the JS overlay whether catalog mode is on (toggles pointer events)."""
+    overlay_id = state.catalog_overlay_id
+    if not overlay_id:
         return
+    enabled = "true" if state.catalog_mode_active else "false"
+    try:
+        ui.run_javascript(
+            f"if (window.__catalogOverlaySetActive) "
+            f"{{ window.__catalogOverlaySetActive({overlay_id!r}, {enabled}); }}",
+        )
+    except RuntimeError:
+        # No active client (e.g. headless / load before page ready).
+        pass
+
+
+def _refresh_catalog_fov_slice(state: _RenderState) -> None:
+    """Compute the FOV-slice of catalog objects for the current frame and ship it to JS.
+
+    Cached per ``(frame_idx, catalog version)`` on ``state`` so
+    re-selecting the same frame is essentially free (#152).
+    """
+    if not state.catalog_mode_active:
+        return
+    pipeline = state.pipeline
+    if pipeline is None or pipeline.project is None:
+        return
+    if not pipeline.project.capture_points:
+        return
+
     frame_idx = state.selected_frame
+    cached = state.catalog_fov_cache.get(frame_idx)
+    if cached is not None:
+        payload = cached
+    else:
+        try:
+            payload = _compute_catalog_fov_slice(state, frame_idx)
+        except FileNotFoundError as exc:
+            logger.warning("catalog missing: %s", exc)
+            try:
+                ui.notify(
+                    "Catalog data/catalog.csv missing — "
+                    "run `make build-catalog`",
+                    type="negative", timeout=6000,
+                )
+            except RuntimeError:
+                pass
+            return
+        except Exception:
+            logger.exception(
+                "catalog FOV-slice failed for frame %d", frame_idx,
+            )
+            return
+        state.catalog_fov_cache[frame_idx] = payload
+
+    overlay_id = state.catalog_overlay_id
+    try:
+        import json as _json
+        ui.run_javascript(
+            f"if (window.__catalogOverlaySetObjects) "
+            f"{{ window.__catalogOverlaySetObjects("
+            f"{overlay_id!r}, {_json.dumps(payload)}); }}",
+        )
+    except RuntimeError:
+        pass
+
+
+def _compute_catalog_fov_slice(
+    state: _RenderState,
+    frame_idx: int,
+) -> dict:
+    """Return a JSON-ready dict describing the catalog objects visible in ``frame_idx``.
+
+    Shape::
+
+        {
+            "frame_index": int,
+            "frame_dims": [orig_w, orig_h],
+            "objects": [
+                {
+                    "id": str, "name": str, "ra": float, "dec": float,
+                    "mag": float, "type": str, "catalog": str,
+                    "pixel_x": float, "pixel_y": float,
+                    "separation_deg": float,
+                },
+                ...
+            ],
+        }
+    """
+    from astropy.io import fits
+    from astropy.wcs import WCS
+
+    from src.renderer.catalog import objects_in_fov
+    from src.renderer.wcs import (
+        build_wcs,
+        pixel_scale_from_fits_header,
+        project_catalog_to_pixels,
+    )
+
+    pipeline = state.pipeline
+    assert pipeline is not None and pipeline.project is not None  # checked by caller
+    project = pipeline.project
     ref_point = next(
         (p for p in project.capture_points if p.index == frame_idx),
         project.capture_points[0],
     )
 
-    with ui.dialog() as dialog, ui.card().classes("w-96"):
-        ui.label("Add catalog label").classes("text-md font-bold")
-        ui.label(
-            f"Reference frame {ref_point.index}: "
-            f"RA={ref_point.ra:.4f}°  Dec={ref_point.dec:.4f}°",
-        ).classes("text-xs text-grey")
-        text_in = ui.input("Text", value="")
-        ra_in = ui.number(
-            "RA (deg)", value=ref_point.ra,
-            format="%.6f", step=0.0001,
-        )
-        dec_in = ui.number(
-            "Dec (deg)", value=ref_point.dec,
-            format="%.6f", step=0.0001,
-        )
-        catalog_id_in = ui.input("Catalog ID (optional)", value="")
-        color_in = ui.input("Color (hex)", value="#ffff00")
-        marker_in = ui.select(
-            ["none", "dot", "cross", "circle"],
-            value="circle", label="Marker",
-        )
-        with ui.row().classes("w-full justify-end"):
-            ui.button("Cancel", on_click=dialog.close).props("flat")
+    debayered = pipeline.debayered_frame(ref_point.index)
+    orig_h, orig_w = debayered.shape[:2]
 
-            def _save() -> None:
-                from src.config import settings
-                from src.renderer.labels import catalog_to_ref_pixel
-                pipeline = state.pipeline
-                if not pipeline or not pipeline.project:
-                    return
-                debayered = pipeline.debayered_frame(ref_point.index)
-                orig_h, orig_w = debayered.shape[:2]
-                px, py = catalog_to_ref_pixel(
-                    ra_deg=float(ra_in.value or ref_point.ra),
-                    dec_deg=float(dec_in.value or ref_point.dec),
-                    frame_center_ra_deg=ref_point.ra,
-                    frame_center_dec_deg=ref_point.dec,
-                    frame_dims=(orig_w, orig_h),
-                    pixel_scale_arcsec=settings.pixel_scale_arcsec,
-                    north_angle_deg=pipeline.project.north_angle_deg,
-                )
-                new_label = Label(
-                    id=str(uuid.uuid4()),
-                    text=text_in.value or (catalog_id_in.value or ""),
-                    ref_frame_index=ref_point.index,
-                    x=px, y=py,
-                    color=color_in.value or "#ffff00",
-                    marker=marker_in.value or "circle",
-                    source="catalog",
-                    catalog_ra=float(ra_in.value),
-                    catalog_dec=float(dec_in.value),
-                    catalog_id=(catalog_id_in.value or None),
-                )
-                pipeline.project.labels.append(new_label)
-                _persist_project(state)
-                _refresh_labels_list(state)
-                dialog.close()
+    # Capture apps (Ekos, NINA) write a full WCS into every frame —
+    # CRVAL, CRPIX, CDELT, CROTA, CTYPE — that already encodes the real
+    # camera rotation, the meridian-flip pierside, and east/north
+    # direction signs that vary per setup. Trying to hand-roll the
+    # equivalent ourselves was wrong twice in a row (#152 smoke tests);
+    # the right move is to defer to astropy and only fall back to our
+    # synthetic WCS when the header is genuinely missing.
+    fits_path = pipeline.frames[ref_point.index].fits_path
+    try:
+        header = fits.getheader(fits_path)
+    except (OSError, ValueError):
+        header = None
 
-            ui.button("Add", color="primary", on_click=_save)
-    dialog.open()
+    center_ra, center_dec = ref_point.ra, ref_point.dec
+    wcs: WCS | None = None
+    scale: float | None = None
+    if header is not None and "CTYPE1" in header and "CRVAL1" in header:
+        try:
+            wcs = WCS(header)
+            center_ra = float(header["CRVAL1"])
+            center_dec = float(header["CRVAL2"])
+        except Exception:  # noqa: BLE001 — astropy raises a heap of types
+            wcs = None
+    scale = pixel_scale_from_fits_header(header)
+    if scale is None:
+        scale = settings.pixel_scale_arcsec
+    if wcs is None:
+        wcs = build_wcs(
+            center_ra_deg=center_ra,
+            center_dec_deg=center_dec,
+            frame_dims=(orig_w, orig_h),
+            pixel_scale_arcsec=scale,
+            north_angle_deg=project.north_angle_deg,
+        )
+
+    # FOV-radius: the larger of the half-diagonal in degrees. Pick a
+    # generous multiplier (1.1x) so objects near the corners aren't
+    # clipped by sub-degree projection error.
+    half_diag_arcsec = (
+        ((orig_w ** 2 + orig_h ** 2) ** 0.5) / 2.0
+        * scale
+    )
+    fov_radius_deg = (half_diag_arcsec / 3600.0) * 1.1
+
+    matches = objects_in_fov(
+        center_ra, center_dec, fov_radius_deg,
+    )
+    with_pixels = project_catalog_to_pixels(matches, wcs, (orig_w, orig_h))
+    return {
+        "frame_index": frame_idx,
+        "frame_dims": [orig_w, orig_h],
+        "objects": with_pixels,
+    }
+
+
+def _handle_catalog_click(state: _RenderState, event) -> None:  # noqa: ANN001 — NiceGUI event
+    """Persist a catalog-sourced label when the JS overlay reports a click."""
+    if not state.pipeline or not state.pipeline.project:
+        return
+    args = event.args or {}
+    if isinstance(args, list) and args:
+        args = args[0]
+    if not isinstance(args, dict):
+        return
+    try:
+        catalog_id = args.get("catalog_id") or ""
+        name = args.get("name") or catalog_id or ""
+        ra = float(args.get("ra"))
+        dec = float(args.get("dec"))
+        ref_frame_index = int(args.get("ref_frame_index", state.selected_frame))
+        px = float(args.get("x", 0.0))
+        py = float(args.get("y", 0.0))
+    except (TypeError, ValueError):
+        logger.warning("catalog_label_click payload malformed: %r", args)
+        return
+
+    new_label = Label(
+        id=str(uuid.uuid4()),
+        text=name or catalog_id,
+        ref_frame_index=ref_frame_index,
+        x=px,
+        y=py,
+        color="#ffff00",
+        marker="circle",
+        source="catalog",
+        catalog_ra=ra,
+        catalog_dec=dec,
+        catalog_id=catalog_id or None,
+    )
+    state.pipeline.project.labels.append(new_label)
+    _persist_project(state)
+    _refresh_labels_list(state)
+    _schedule_preview_refresh(state)
+
+
+def _catalog_overlay_script(overlay_id: str) -> str:
+    """Vanilla-JS overlay: hover -> nearest-object tooltip, click -> emit event.
+
+    Same pattern as the histogram drag-handle overlay (#111): we
+    inject one ``<script>`` block per page, parameterised by the
+    overlay id so multiple instances coexist safely. The script
+    listens on pointermove/click on the overlay div, runs a linear
+    nearest-search over the (≤ a few hundred) catalog points the
+    server pushed, and renders a floating tooltip purely in DOM
+    (no WebSocket roundtrip per move).
+    """
+    return f"""<script>
+(function() {{
+  const OVERLAY_ID = {overlay_id!r};
+
+  if (!window.__catalogOverlayState) window.__catalogOverlayState = {{}};
+  const state = window.__catalogOverlayState[OVERLAY_ID] = (
+    window.__catalogOverlayState[OVERLAY_ID]
+    || {{active: false, objects: [], frameIndex: 0,
+         natW: 0, natH: 0, tooltipEl: null}}
+  );
+
+  function ensureTooltip(overlay) {{
+    if (state.tooltipEl && document.body.contains(state.tooltipEl)) {{
+      return state.tooltipEl;
+    }}
+    const el = document.createElement('div');
+    el.style.cssText = (
+      'position: fixed; pointer-events: none; z-index: 9999; '
+      + 'background: rgba(20,20,25,0.92); color: #fff; '
+      + 'padding: 4px 8px; border-radius: 4px; font-size: 12px; '
+      + 'font-family: sans-serif; display: none; '
+      + 'border: 1px solid rgba(255,255,255,0.2); white-space: nowrap;'
+    );
+    document.body.appendChild(el);
+    state.tooltipEl = el;
+    return el;
+  }}
+
+  function applyActive() {{
+    const overlay = document.getElementById(OVERLAY_ID);
+    if (!overlay) return;
+    if (state.active) {{
+      overlay.style.pointerEvents = 'auto';
+      overlay.style.cursor = 'crosshair';
+    }} else {{
+      overlay.style.pointerEvents = 'none';
+      overlay.style.cursor = '';
+      if (state.tooltipEl) state.tooltipEl.style.display = 'none';
+    }}
+  }}
+
+  // Project a screen-space coordinate inside the overlay onto the
+  // original-frame pixel space. The overlay is sized exactly like the
+  // <img>, so its bounding rect gives us the displayed size; we scale
+  // by (natW/dispW) to get natural-image pixels and again by
+  // (orig/nat) — which is 1.0 here because the JPEG is downsampled
+  // BEFORE we ship it to the browser. The orig->nat scale lives in
+  // the payload's frame_dims relative to the image's naturalWidth.
+  function overlayToOrigPixel(overlay, evt) {{
+    const rect = overlay.getBoundingClientRect();
+    const dispW = Math.max(1, rect.width);
+    const dispH = Math.max(1, rect.height);
+    const cssX = evt.clientX - rect.left;
+    const cssY = evt.clientY - rect.top;
+    const img = overlay.parentElement
+      ? overlay.parentElement.querySelector('img')
+      : null;
+    const natW = (img && img.naturalWidth) || dispW;
+    const natH = (img && img.naturalHeight) || dispH;
+    const natX = cssX * (natW / dispW);
+    const natY = cssY * (natH / dispH);
+    const origW = (state.objects && state.objects.length && state.frameDims)
+      ? state.frameDims[0] : natW;
+    const origH = (state.objects && state.objects.length && state.frameDims)
+      ? state.frameDims[1] : natH;
+    const scale = origW / Math.max(1, natW);
+    return {{
+      origX: natX * scale,
+      origY: natY * scale,
+      cssX, cssY,
+      origW, origH,
+    }};
+  }}
+
+  function nearest(origX, origY) {{
+    let best = null;
+    let bestD2 = Infinity;
+    for (const obj of state.objects) {{
+      const dx = obj.pixel_x - origX;
+      const dy = obj.pixel_y - origY;
+      const d2 = dx * dx + dy * dy;
+      if (d2 < bestD2) {{
+        bestD2 = d2;
+        best = obj;
+      }}
+    }}
+    return best ? {{obj: best, dist: Math.sqrt(bestD2)}} : null;
+  }}
+
+  function onMove(ev) {{
+    const overlay = document.getElementById(OVERLAY_ID);
+    if (!overlay || !state.active) return;
+    if (!state.objects || state.objects.length === 0) {{
+      const tip = ensureTooltip(overlay);
+      tip.textContent = '(no catalog objects in FOV)';
+      tip.style.left = (ev.clientX + 12) + 'px';
+      tip.style.top = (ev.clientY + 12) + 'px';
+      tip.style.display = 'block';
+      return;
+    }}
+    const proj = overlayToOrigPixel(overlay, ev);
+    const hit = nearest(proj.origX, proj.origY);
+    if (!hit) return;
+    const tip = ensureTooltip(overlay);
+    const dist_deg = hit.obj.separation_deg !== undefined
+      ? hit.obj.separation_deg
+      : 0.0;
+    // Convert hover-cursor->object pixel distance to a sky angle.
+    // Pixel scale is encoded indirectly via the rendered FOV vs the
+    // orig dims; the server-side ``separation_deg`` on the object
+    // is from FOV center, which isn't quite what we want here.
+    // Show the object name + catalog id + arcmin distance from cursor.
+    const pixScalePerOrig = state.objects.length
+      ? (hit.obj.separation_deg / Math.max(1e-6, Math.hypot(
+          hit.obj.pixel_x - proj.origW / 2,
+          hit.obj.pixel_y - proj.origH / 2,
+        )))
+      : 0;
+    const cursorDistDeg = hit.dist * pixScalePerOrig;
+    const arcmin = (cursorDistDeg * 60.0).toFixed(1);
+    const id = hit.obj.id || '';
+    const name = hit.obj.name || id;
+    const label = id && id !== name
+      ? name + ' (' + id + ')'
+      : name;
+    tip.textContent = label + '  ·  ' + arcmin + "'";
+    tip.style.left = (ev.clientX + 14) + 'px';
+    tip.style.top = (ev.clientY + 14) + 'px';
+    tip.style.display = 'block';
+  }}
+
+  function onLeave() {{
+    if (state.tooltipEl) state.tooltipEl.style.display = 'none';
+  }}
+
+  function onClick(ev) {{
+    const overlay = document.getElementById(OVERLAY_ID);
+    if (!overlay || !state.active) return;
+    if (!state.objects || state.objects.length === 0) return;
+    const proj = overlayToOrigPixel(overlay, ev);
+    const hit = nearest(proj.origX, proj.origY);
+    if (!hit) return;
+    const payload = {{
+      catalog_id: hit.obj.id,
+      name: hit.obj.name,
+      ra: hit.obj.ra,
+      dec: hit.obj.dec,
+      ref_frame_index: state.frameIndex,
+      x: hit.obj.pixel_x,
+      y: hit.obj.pixel_y,
+    }};
+    try {{
+      if (window.emitEvent) {{
+        window.emitEvent('catalog_label_click', payload);
+      }}
+    }} catch (e) {{
+      console.warn('catalog emit failed', e);
+    }}
+  }}
+
+  function attach() {{
+    const overlay = document.getElementById(OVERLAY_ID);
+    if (!overlay) {{ setTimeout(attach, 50); return; }}
+    if (overlay.__catBound) {{ applyActive(); return; }}
+    overlay.__catBound = true;
+    overlay.addEventListener('pointermove', onMove);
+    overlay.addEventListener('pointerleave', onLeave);
+    overlay.addEventListener('click', onClick);
+    applyActive();
+  }}
+
+  window.__catalogOverlaySetActive = window.__catalogOverlaySetActive
+    || function(id, active) {{
+      const s = window.__catalogOverlayState && window.__catalogOverlayState[id];
+      if (!s) return;
+      s.active = !!active;
+      applyActive();
+    }};
+
+  window.__catalogOverlaySetObjects = window.__catalogOverlaySetObjects
+    || function(id, payload) {{
+      const s = window.__catalogOverlayState && window.__catalogOverlayState[id];
+      if (!s) return;
+      s.objects = (payload && payload.objects) || [];
+      s.frameIndex = (payload && payload.frame_index) || 0;
+      s.frameDims = (payload && payload.frame_dims) || null;
+    }};
+
+  if (document.readyState === 'loading') {{
+    document.addEventListener('DOMContentLoaded', attach);
+  }} else {{
+    attach();
+  }}
+}})();
+</script>"""
 
 
 def _toggle_click_to_add(state: _RenderState) -> None:
@@ -1881,6 +2291,19 @@ class _RenderState:
         self.labels_panel: ui.expansion | None = None
         self.labels_list_container: ui.column | None = None
         self.click_to_add_active: bool = False
+        # Catalog click-mode (issue #152). When True the JS overlay sits
+        # on top of the preview, hover shows the nearest-catalog tooltip
+        # and click emits a ``catalog_label_click`` event. Persisted as
+        # an app-level UI preference. The FOV-slice cache is recomputed
+        # whenever the selected frame changes; entries are keyed by
+        # frame_index and contain the full payload sent to the JS side.
+        self.catalog_mode_active: bool = bool(
+            stored.get("catalog_mode_active", False),
+        )
+        self.catalog_overlay_id: str = ""
+        self.catalog_overlay: ui.element | None = None
+        self.catalog_mode_button: ui.button | None = None
+        self.catalog_fov_cache: dict[int, dict] = {}
         # Preview display mode (issue #148). False = compact (max-h-96,
         # fast overview); True = detail (native size, scrollable — for
         # pixel-precise label placement on high-res frames).
@@ -1930,6 +2353,8 @@ async def _load(state: _RenderState) -> None:
         state.pipeline = pipeline
         # New pipeline => stale histograms are no longer valid.
         state.histogram_cache.clear()
+        # New project => recompute the catalog FOV-slice from scratch.
+        state.catalog_fov_cache.clear()
         # Soft-migrate any legacy app.storage render fields into the
         # just-loaded project (#151). The first ``_save_render_state``
         # above already pruned the live ``app.storage["render"]`` down
@@ -2015,6 +2440,14 @@ async def _load(state: _RenderState) -> None:
             _set_render_status(state, "", 0)
             await _show_preview(state, 0)
             _refresh_labels_list(state)
+            # Push the persisted catalog-mode toggle state into the JS
+            # overlay now that a project is loaded (issue #152). Also
+            # primes the FOV-slice if mode was already on from a prior
+            # session — saves the user a second click.
+            _apply_catalog_mode_button(state)
+            _push_catalog_overlay_state(state)
+            if state.catalog_mode_active:
+                _refresh_catalog_fov_slice(state)
             ui.notify(f"Ready — {n} frames loaded")
         except RuntimeError as exc:
             logger.info("UI gone before load finished: %s", exc)
@@ -2149,6 +2582,10 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
     # "Aktuelles Frame übernehmen" button highlights immediately when
     # the user navigates away from the current reference.
     _update_ref_frame_indicator(state)
+    # Recompute the catalog FOV-slice for the new frame and ship it
+    # to the JS overlay (issue #152). Cheap when cached.
+    if state.catalog_mode_active:
+        _refresh_catalog_fov_slice(state)
 
     # Keep the pipeline config in sync with state so the preview
     # honors the freeze toggle and current frozen params (WYSIWYG —

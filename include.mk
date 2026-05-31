@@ -2,7 +2,7 @@ NC_HOST ?= 0.0.0.0
 NC_PORT ?= 8090
 SKYDATA_URL ?= https://stellarium-web.org/skydata
 
-.PHONY: run-capture run-render skydata skydata-extra skydata-dso skydata-stars-deep self-heal-venv
+.PHONY: run-capture run-render skydata skydata-extra skydata-dso skydata-stars-deep self-heal-venv build-catalog
 
 # Self-heal the venv if its Python build doesn't match $(UV_PYTHON) (#150).
 # Runs every invocation, but only deletes when a mismatch is detected. The
@@ -102,3 +102,12 @@ skydata-full: skydata-extra
 	done
 	@du -sh skydata/
 	@echo "Full catalogues downloaded."
+
+## Regenerate the bundled catalog (Messier + Caldwell + OpenNGC + IAU named
+## stars) at data/catalog.csv from upstream sources. The CSV is committed
+## to the repo, so end-users never need to run this — maintainers do it
+## ~1-2x/year. See scripts/build_catalog.py for the source list.
+build-catalog: install-render
+	@.venv/bin/python scripts/build_catalog.py
+	@echo "Catalog regenerated at data/catalog.csv"
+	@wc -l data/catalog.csv

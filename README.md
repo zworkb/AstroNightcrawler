@@ -219,6 +219,22 @@ make check           # Linting (ruff)
 make mypy            # Type checking
 ```
 
+### Catalog Update
+
+The sky catalog used by the renderer's Catalog-mode label tool
+(`data/catalog.csv`, Messier + Caldwell + OpenNGC + IAU named stars)
+is committed to the repo. End-users never need to regenerate it.
+Maintainers can refresh it from upstream ~1-2x/year when OpenNGC or
+the IAU named-star list publishes new entries:
+
+```bash
+make build-catalog   # Downloads sources + writes data/catalog.csv (~15k rows)
+git diff data/catalog.csv  # review what changed
+```
+
+Requires internet (downloads from raw.githubusercontent.com/mattiaverga/OpenNGC
+and pas.rochester.edu/~emamajek/WGSN/).
+
 ## Documentation
 
 - [Sky Path Cinematography — Genre & Prior Art](docs/related-work.md)

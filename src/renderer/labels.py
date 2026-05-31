@@ -111,6 +111,14 @@ def catalog_to_ref_pixel(
     plate), y increases downward. North up means +Dec maps to
     decreasing y.
 
+    Note: this remains a flat-tangent approximation rather than a
+    gnomonic projection (#152). The render pipeline burns labels at
+    well under 1-degree offsets from frame center, where the flat
+    approximation is sub-pixel accurate. The live-preview overlay
+    introduced in #152 instead routes through :mod:`src.renderer.wcs`,
+    which is a proper TAN-WCS and stays accurate for full FOV-wide
+    object distributions.
+
     Args:
         ra_deg: Catalog object's RA in degrees.
         dec_deg: Catalog object's Dec in degrees.

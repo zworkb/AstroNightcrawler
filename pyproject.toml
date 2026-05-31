@@ -19,6 +19,10 @@ render = [
     "astroalign>=2.6",
     "colour-demosaicing>=0.2",
     "Pillow>=10.0",
+    # Used by scripts/build_catalog.py (maintainer tool, #152).
+    # Already a transitive dep via nicegui, but pinned here to keep
+    # ``make build-catalog`` working even if NiceGUI drops it later.
+    "httpx>=0.27",
 ]
 dev = [
     "pytest>=8.0",
