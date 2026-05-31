@@ -12,7 +12,7 @@ from nicegui import app, ui
 from PIL import Image
 
 from src.config import settings
-from src.models.project import Label
+from src.models.project import Label, Project, RenderSettings
 from src.renderer.pipeline import ProgressUpdate, RenderConfig, RenderPipeline
 from src.renderer.stretch import (
     AutoStretchParams,
@@ -1263,15 +1263,22 @@ def _build_output_settings(state: _RenderState) -> None:
         )
 
 
-# Names of _RenderState attributes that survive across sessions via
-# app.storage.general["render"]. Manual stretch handles (black/white/
-# midtone) are intentionally excluded — they're per-image tuning,
-# overwritten on every mode switch by the auto-seeding logic. The
-# auto-stretch reference anchors are also excluded (per-reference-frame,
-# don't generalise). See issue #122 for the full reasoning.
-_PERSISTED_FIELDS: tuple[str, ...] = (
+# Per-machine fields — stay in ``app.storage.general["render"]``. These
+# are paths (machine-specific) and hardware/UI prefs (also machine-
+# specific). See issue #151 for the rationale behind the split.
+_APP_PERSISTED_FIELDS: tuple[str, ...] = (
     "input_dir",
     "output_path",
+    "render_workers",
+    "preview_detail_mode",
+)
+
+# Per-project fields — serialised into ``manifest.json`` via
+# ``Project.render_settings`` (issue #151). These are the "look" and
+# output-format decisions for *this* project: stretch tuning, output
+# format, alignment params. Manual stretch handles (black/white/midtone)
+# ARE included here now — they're per-project tuning, not per-session.
+_PROJECT_PERSISTED_FIELDS: tuple[str, ...] = (
     "fps",
     "crf",
     "speed",
@@ -1281,34 +1288,166 @@ _PERSISTED_FIELDS: tuple[str, ...] = (
     "resolution",
     "align_max_dim",
     "align_sigma",
-    "render_workers",
     "linear_pan_blend_tail",
-    "preview_detail_mode",
+    "black",
+    "white",
+    "midtone",
+    "auto_stretch_freeze",
+    "auto_stretch_params",
+)
+
+# Kept for backward compat with any external code that imported the old
+# name. New code should use ``_APP_PERSISTED_FIELDS`` /
+# ``_PROJECT_PERSISTED_FIELDS`` explicitly.
+_PERSISTED_FIELDS: tuple[str, ...] = (
+    _APP_PERSISTED_FIELDS + _PROJECT_PERSISTED_FIELDS
 )
 
 
 def _load_render_state() -> dict:
-    """Return the persisted render-UI dict (empty if no prior session)."""
+    """Return the persisted render-UI dict (empty if no prior session).
+
+    Returns only the app-level fields after #151 — project-level fields
+    are loaded from the manifest's ``render_settings`` once a project is
+    opened. Legacy project-level keys still present in app.storage are
+    left in place here; they get soft-migrated on first project load
+    via :func:`_maybe_soft_migrate_render_settings`.
+    """
     return app.storage.general.get("render", {})
 
 
 def _save_render_state(state: _RenderState) -> None:
-    """Snapshot persistable _RenderState fields into app.storage.general."""
+    """Persist the render UI state across both storage layers.
+
+    App-level fields (paths, workers, UI prefs) → ``app.storage.general``.
+    Project-level fields (stretch, output format, alignment) → into the
+    loaded project's ``render_settings`` + manifest.json.
+
+    Issue #151: this is the write-side counterpart to the load split.
+    """
+    # 1) App-level → app.storage.general (machine-global).
     app.storage.general["render"] = {
-        k: getattr(state, k) for k in _PERSISTED_FIELDS
+        k: getattr(state, k) for k in _APP_PERSISTED_FIELDS
     }
+
+    # 2) Project-level → manifest.json (per-project).
+    pipeline = state.pipeline
+    if pipeline is None or pipeline.project is None:
+        return  # no project loaded yet; nothing to persist project-side
+    rs = pipeline.project.render_settings
+    for attr in _PROJECT_PERSISTED_FIELDS:
+        # ``auto_stretch_params`` is a pydantic model on _RenderState and
+        # is the same type on ``RenderSettings`` — assigning it through is
+        # safe; pydantic will validate on the next dump/load cycle.
+        setattr(rs, attr, getattr(state, attr))
+    _persist_project(state)
 
 
 def _persist_project(state: _RenderState) -> None:
     """Write the (possibly modified) project back to manifest.json.
 
-    Called after any in-UI mutation of the labels list so the change
-    survives a tab close even before the next render.
+    Called after any in-UI mutation of the labels list or render
+    settings so the change survives a tab close even before the next
+    render.
     """
     if not state.pipeline or not state.pipeline.project:
         return
     manifest_path = state.pipeline.capture_dir / "manifest.json"
     manifest_path.write_text(state.pipeline.project.model_dump_json(indent=2))
+
+
+def _maybe_soft_migrate_render_settings(
+    project: Project,
+    app_store: dict,
+) -> bool:
+    """One-time lift of legacy app.storage render fields into the project.
+
+    Before #151 the project-level fields (stretch_mode, B/W/M, fps,
+    crf, etc.) were stored in ``app.storage.general["render"]``. On the
+    first project-open after upgrade we want to preserve any tuning the
+    user already invested — without it the user would see their
+    stretch/output settings silently revert to defaults.
+
+    Strategy:
+        * Only migrate when the project's ``render_settings`` is still
+          the pristine default (i.e. the manifest was written before
+          this issue or by capture-only). A project that already carries
+          customised settings wins — we never overwrite per-project
+          tuning with legacy machine-global values.
+        * Lift each legacy key into ``project.render_settings`` if it
+          maps to a known project-level field, then drop it from the
+          app-store dict so we don't migrate twice.
+
+    Args:
+        project: The just-loaded project (mutated in place on migration).
+        app_store: Mutable mapping behind ``app.storage.general["render"]``
+            (mutated in place: legacy project-level keys removed).
+
+    Returns:
+        ``True`` if any field was migrated, ``False`` otherwise.
+    """
+    if project.render_settings != RenderSettings():
+        return False  # already customised; never overwrite per-project tuning
+    legacy: dict[str, object] = {
+        k: app_store[k] for k in _PROJECT_PERSISTED_FIELDS if k in app_store
+    }
+    if not legacy:
+        return False
+    for key, value in legacy.items():
+        # Pydantic will coerce numbers (e.g. int from JSON) and validate
+        # ``auto_stretch_params`` if it's a dict; if validation fails we
+        # leave the field at its default rather than crashing the load.
+        try:
+            setattr(project.render_settings, key, value)
+        except Exception:  # noqa: BLE001 — best-effort migration
+            logger.warning(
+                "soft-migrate: dropping invalid legacy value for %s=%r",
+                key, value,
+            )
+    for key in legacy:
+        app_store.pop(key, None)
+    logger.info(
+        "soft-migrated %d legacy render fields from app.storage into project "
+        "manifest: %s", len(legacy), sorted(legacy.keys()),
+    )
+    return True
+
+
+def _apply_render_settings_to_state(
+    state: _RenderState,
+    rs: RenderSettings,
+) -> None:
+    """Copy a project's ``render_settings`` onto the live UI state.
+
+    Used after loading a project so the renderer UI immediately reflects
+    *that project's* look/output decisions rather than whatever was left
+    on screen from the previously-opened project.
+
+    NiceGUI's ``bind_value`` propagates the state changes to the bound
+    number inputs (B/W/M, fps, crf, etc.) automatically. The histogram
+    overlay's drag handles however are HTML/JS elements positioned
+    against ``window.__histState`` — those don't track state mutations
+    unless we explicitly re-emit the JS-side positions. Same for the
+    rendered preview which uses the stretch params on every refresh.
+    See #111 (histogram widget) and #110 (live preview).
+    """
+    for attr in _PROJECT_PERSISTED_FIELDS:
+        setattr(state, attr, getattr(rs, attr))
+    # NiceGUI's bind_value reliably tracks INPUT→state but not always
+    # state→INPUT after a programmatic setattr on a plain class. Force
+    # the bound number inputs to re-read state via set_value so the
+    # widgets visually update on project load. The histogram drag
+    # handles are JS-overlay positions and need _refresh_histogram_overlay
+    # below; the preview JPEG needs a re-render via _schedule_preview_refresh.
+    if state.black_input is not None:
+        state.black_input.set_value(state.black)
+    if state.white_input is not None:
+        state.white_input.set_value(state.white)
+    if state.midtone_input is not None:
+        state.midtone_input.set_value(state.midtone)
+    if state.histogram_chart is not None:
+        _refresh_histogram_overlay(state)
+    _schedule_preview_refresh(state)
 
 
 def _build_labels_panel(state: _RenderState) -> None:
@@ -1640,26 +1779,18 @@ class _RenderState:
     """Mutable state for the render UI."""
 
     def __init__(self) -> None:
-        """Initialize default render state."""
+        """Initialize default render state.
+
+        After #151 only the app-level fields (paths, workers, UI prefs)
+        come from ``app.storage.general["render"]``. Project-level
+        fields (stretch tuning, output format, alignment) are seeded
+        from :class:`RenderSettings` defaults and overwritten when a
+        project is actually loaded.
+        """
         stored = _load_render_state()
+        # ---- App-level (machine-global) ----
         self.input_dir: str = stored.get("input_dir", "./output/")
-        self.stretch_mode: str = stored.get("stretch_mode", "histogram")
-        self.black: float = 0.0
-        self.white: float = 1.0
-        self.midtone: float = 1.0
-        self.transition: str = stored.get("transition", "linear-pan")
-        self.fps: int = stored.get("fps", settings.render_fps)
-        self.crf: int = stored.get("crf", settings.render_crf)
-        self.speed: float = stored.get("speed", settings.render_speed)
-        self.crossfade_frames: int = stored.get(
-            "crossfade_frames", settings.render_crossfade_frames,
-        )
-        self.align_max_dim: int = stored.get(
-            "align_max_dim", settings.render_align_max_dim,
-        )
-        self.align_sigma: float = stored.get(
-            "align_sigma", settings.render_align_sigma,
-        )
+        self.output_path: str = stored.get("output_path", "output.mp4")
         # Worker count for alignment + stretch (issue #120). -1 means
         # all CPU cores; default 4 is a memory-safe baseline. The
         # source priority is GUI (this field) > CLI > env > settings;
@@ -1669,13 +1800,28 @@ class _RenderState:
         self.render_workers: int = stored.get(
             "render_workers", settings.render_workers,
         )
+
+        # ---- Project-level (issue #151: per-project, in manifest) ----
+        # Initialised from RenderSettings defaults so the UI has sane
+        # starting values before any project is loaded. Once a project
+        # is opened, ``_apply_render_settings_to_state`` overwrites
+        # these with that project's persisted values.
+        _rs_defaults = RenderSettings()
+        self.stretch_mode: str = _rs_defaults.stretch_mode
+        self.black: float = _rs_defaults.black
+        self.white: float = _rs_defaults.white
+        self.midtone: float = _rs_defaults.midtone
+        self.transition: str = _rs_defaults.transition
+        self.fps: int = _rs_defaults.fps
+        self.crf: int = _rs_defaults.crf
+        self.speed: float = _rs_defaults.speed
+        self.crossfade_frames: int = _rs_defaults.crossfade_frames
+        self.align_max_dim: int = _rs_defaults.align_max_dim
+        self.align_sigma: float = _rs_defaults.align_sigma
         # Tail-blend frames for linear_pan transitions (issue #126).
         # 0 (default) = no blending; pre-#126 byte-identical output.
-        self.linear_pan_blend_tail: int = stored.get(
-            "linear_pan_blend_tail", settings.render_linear_pan_blend_tail,
-        )
-        self.resolution: str = stored.get("resolution", "720p")
-        self.output_path: str = stored.get("output_path", "output.mp4")
+        self.linear_pan_blend_tail: int = _rs_defaults.linear_pan_blend_tail
+        self.resolution: str = _rs_defaults.resolution
         self.pipeline: RenderPipeline | None = None
         self.preview: ui.image | None = None
         self.filmstrip: ui.row | None = None
@@ -1759,9 +1905,17 @@ async def _load(state: _RenderState) -> None:
     if state.loading:
         ui.notify("Load already in progress", type="warning")
         return
+    # Snapshot the legacy app.storage dict BEFORE the first _save_render_state
+    # call below — that call wipes the dict down to the new app-only fields
+    # and would erase any legacy project-level keys (stretch_mode, fps, …)
+    # we want to soft-migrate into the about-to-be-loaded project (#151).
+    legacy_app_store = dict(app.storage.general.get("render", {}))
     # Persist current UI state on Load too (not just Render): committing to
     # a capture directory is the natural moment to remember it for next
-    # time, even if the user never proceeds to render.
+    # time, even if the user never proceeds to render. With #151 this
+    # also writes the OUTGOING project's render_settings back to its
+    # manifest before we open the new project — so tuning never leaks
+    # between projects via in-memory state.
     _save_render_state(state)
     state.loading = True
     try:
@@ -1776,15 +1930,41 @@ async def _load(state: _RenderState) -> None:
         state.pipeline = pipeline
         # New pipeline => stale histograms are no longer valid.
         state.histogram_cache.clear()
+        # Soft-migrate any legacy app.storage render fields into the
+        # just-loaded project (#151). The first ``_save_render_state``
+        # above already pruned the live ``app.storage["render"]`` down
+        # to the new app-only fields, so we pass the pre-prune snapshot
+        # ``legacy_app_store`` to recover the project-level values. The
+        # migration drops those keys from ``legacy_app_store`` — we
+        # don't need to mirror that into the live dict because it
+        # already lacks them. After migration we apply the project's
+        # render_settings to the UI state so the user sees the project's
+        # own look.
+        if pipeline.project is not None:
+            migrated = _maybe_soft_migrate_render_settings(
+                pipeline.project,
+                legacy_app_store,
+            )
+            if migrated:
+                # Persist the migrated values into the manifest now so a
+                # crash before the user touches anything doesn't lose them.
+                _persist_project(state)
+            _apply_render_settings_to_state(
+                state, pipeline.project.render_settings,
+            )
         # Seed initial auto-stretch params from frame 0 so freeze=True
         # has something sensible at first paint. The user can switch
         # the reference frame later via "Aktuelles Frame übernehmen".
         # If frame 0 fails to load for any reason we fall back to
         # params=None — the freeze becomes effectively inactive until
         # the user sets a reference manually.
-        state.auto_stretch_params = None
+        #
+        # #151: if the project already carries auto_stretch_params (set
+        # earlier in this session or migrated/loaded from the manifest),
+        # keep them — they're the user's frozen reference, recomputing
+        # would flicker. Only seed when no params were applied.
         state.auto_stretch_ref_frame = None
-        if pipeline.frames:
+        if state.auto_stretch_params is None and pipeline.frames:
             try:
                 ref_data = await asyncio.to_thread(
                     pipeline.debayered_frame, 0,

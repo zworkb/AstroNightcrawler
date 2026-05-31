@@ -9,6 +9,12 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+# ``AutoStretchParams`` lives in ``src.renderer.stretch`` and is itself a
+# pydantic ``BaseModel`` (see #114). We import it eagerly here — ``stretch``
+# is a leaf module (numpy + astropy only) and does not import from
+# ``models.project``, so there is no circular-import risk.
+from src.renderer.stretch import AutoStretchParams
+
 
 class Coordinate(BaseModel):
     """A sky coordinate in RA/Dec (degrees, J2000)."""
@@ -100,6 +106,49 @@ class CaptureSettings(BaseModel):
             msg = f"Point spacing must be positive, got {v}"
             raise ValueError(msg)
         return v
+
+
+class RenderSettings(BaseModel):
+    """Per-project render output + look parameters (issue #151).
+
+    Holds the "look" decisions for *this* project's video render —
+    stretch mode, manual black/white/midtone handles, frozen
+    auto-stretch ZScale params, output format (fps/crf/resolution/
+    speed), transition look, and alignment tuning.
+
+    Prior to #151 these lived in ``app.storage.general["render"]``
+    (machine-global), which leaked tuning between projects whenever
+    the user switched the renderer's input directory. Moving them
+    into the manifest pins them to the project that actually carries
+    the look — and lets the tuning travel between machines.
+
+    Backward compat: ``extra="ignore"`` silently drops unknown keys
+    (forward-compat smoke), and every field has a default so old
+    manifests without ``render_settings`` validate cleanly.
+    """
+
+    model_config = ConfigDict(extra="ignore")
+
+    # ----- Stretch / tonemap -----
+    stretch_mode: str = "auto"
+    black: float = 0.0
+    white: float = 1.0
+    midtone: float = 1.0
+    auto_stretch_freeze: bool = True
+    auto_stretch_params: AutoStretchParams | None = None
+    linear_pan_blend_tail: int = 0
+
+    # ----- Output format -----
+    fps: int = 24
+    crf: int = 18
+    transition: str = "crossfade"
+    crossfade_frames: int = 24
+    resolution: str = "native"
+    speed: float = 1.0
+
+    # ----- Alignment -----
+    align_max_dim: int = 0
+    align_sigma: float = 2.0
 
 
 class CapturedFrame(BaseModel):
@@ -248,6 +297,12 @@ class Project(BaseModel):
     path: SplinePath = Field(description="The spline path for the sequence")
     capture_settings: CaptureSettings = Field(
         default_factory=CaptureSettings, description="Capture parameters"
+    )
+    # Per-project render look/output settings (issue #151). Default
+    # factory makes old manifests without this key validate cleanly.
+    render_settings: RenderSettings = Field(
+        default_factory=RenderSettings,
+        description="Per-project render output and look parameters",
     )
     capture_points: list[CapturePoint] = Field(
         default_factory=list, description="Generated capture points along the path"
