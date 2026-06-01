@@ -2013,14 +2013,21 @@ def _catalog_overlay_script(overlay_id: str) -> str:
   // BEFORE we ship it to the browser. The orig->nat scale lives in
   // the payload's frame_dims relative to the image's naturalWidth.
   function overlayToOrigPixel(overlay, evt) {{
-    const rect = overlay.getBoundingClientRect();
+    // Use the IMG's bounding rect, not the overlay's. The overlay div
+    // sits inside ``preview_stack`` and is sized ``absolute inset-0``
+    // (fills the parent). NiceGUI's layout may add padding/margin so
+    // the parent is slightly larger than the IMG, which would shift
+    // every click a few pixels to the right (#153 smoke).
+    const img = overlay.parentElement
+      ? overlay.parentElement.querySelector('img')
+      : null;
+    const rect = (img && img.getBoundingClientRect)
+      ? img.getBoundingClientRect()
+      : overlay.getBoundingClientRect();
     const dispW = Math.max(1, rect.width);
     const dispH = Math.max(1, rect.height);
     const cssX = evt.clientX - rect.left;
     const cssY = evt.clientY - rect.top;
-    const img = overlay.parentElement
-      ? overlay.parentElement.querySelector('img')
-      : null;
     const natW = (img && img.naturalWidth) || dispW;
     const natH = (img && img.naturalHeight) || dispH;
     const natX = cssX * (natW / dispW);
@@ -2074,17 +2081,25 @@ def _catalog_overlay_script(overlay_id: str) -> str:
   }}
 
   function projOrigToCss(overlay, origX, origY) {{
-    const rect = overlay.getBoundingClientRect();
+    // Match overlayToOrigPixel: project into the IMG's coord system,
+    // then translate to overlay-rect-relative coords (the canvas the
+    // rubber-band draws on is sized to the overlay rect, so the
+    // rubber-band start point must be in overlay-rel space).
+    const overlayRect = overlay.getBoundingClientRect();
     const img = overlay.parentElement
       ? overlay.parentElement.querySelector('img')
       : null;
-    const natW = (img && img.naturalWidth) || rect.width;
-    const natH = (img && img.naturalHeight) || rect.height;
+    const imgRect = (img && img.getBoundingClientRect)
+      ? img.getBoundingClientRect()
+      : overlayRect;
+    const natW = (img && img.naturalWidth) || imgRect.width;
+    const natH = (img && img.naturalHeight) || imgRect.height;
     const origW = (state.frameDims && state.frameDims[0]) || natW;
     const origH = (state.frameDims && state.frameDims[1]) || natH;
+    // orig px → img-rel CSS px → overlay-rel CSS px (for canvas drawing).
     return {{
-      cssX: origX * (rect.width / Math.max(1, origW)),
-      cssY: origY * (rect.height / Math.max(1, origH)),
+      cssX: origX * (imgRect.width / Math.max(1, origW)) + (imgRect.left - overlayRect.left),
+      cssY: origY * (imgRect.height / Math.max(1, origH)) + (imgRect.top - overlayRect.top),
     }};
   }}
 
@@ -2905,13 +2920,16 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
                 # final render writes labels to the full-resolution
                 # frame and is unaffected — this only matters for the
                 # preview JPEG.
+                # Keep font_size at the orig-pixel value: the preview
+                # is for label-placement feedback, not WYSIWYG with the
+                # final video. Scaling fonts down by ~5x would make
+                # them illegible (font_size=24 → 5px in the thumb).
                 here = [
                     lbl.model_copy(update={
                         "x": lbl.x * preview_scale,
                         "y": lbl.y * preview_scale,
                         "text_offset_x": int(round(lbl.text_offset_x * preview_scale)),
                         "text_offset_y": int(round(lbl.text_offset_y * preview_scale)),
-                        "font_size": max(6, int(round(lbl.font_size * preview_scale))),
                     })
                     for lbl in state.pipeline.project.labels
                     if lbl.ref_frame_index == frame_idx
