@@ -2066,7 +2066,19 @@ def _catalog_overlay_script(overlay_id: str) -> str:
         const id = hit.obj.id || '';
         const name = hit.obj.name || id;
         const label = id && id !== name ? name + ' (' + id + ')' : name;
-        tip.textContent = label;
+        // Cursor → object distance in arcmin. Derive deg/orig-px
+        // from the hit object's known angular separation from the
+        // frame centre + its pixel offset from the same centre —
+        // works without us shipping the WCS down to the JS side
+        // (#152, restored after the #154 refactor).
+        const objDistFromCentre = Math.max(1e-6, Math.hypot(
+          hit.obj.pixel_x - proj.origW / 2,
+          hit.obj.pixel_y - proj.origH / 2,
+        ));
+        const degPerOrigPx = (hit.obj.separation_deg !== undefined)
+          ? hit.obj.separation_deg / objDistFromCentre : 0;
+        const arcmin = (hit.dist * degPerOrigPx * 60.0).toFixed(1);
+        tip.textContent = label + "  ·  " + arcmin + "'";
         tip.style.left = (ev.clientX + 14) + 'px';
         tip.style.top = (ev.clientY + 14) + 'px';
         tip.style.display = 'block';
