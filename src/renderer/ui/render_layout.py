@@ -2897,10 +2897,21 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
             if state.pipeline.project:
                 preview_scale = thumb_w / orig_w if orig_w else 1.0
                 from src.renderer.labels import _draw_labels  # local import to avoid cycle at module load
+                # Scale ALL pixel-sized fields by preview_scale, not just
+                # the marker position. text_offset_x/y and font_size live
+                # in orig-pixel space; copying them through without
+                # scaling makes leader lines render ~1/preview_scale
+                # times longer than the user clicked (#153 smoke). The
+                # final render writes labels to the full-resolution
+                # frame and is unaffected — this only matters for the
+                # preview JPEG.
                 here = [
                     lbl.model_copy(update={
                         "x": lbl.x * preview_scale,
                         "y": lbl.y * preview_scale,
+                        "text_offset_x": int(round(lbl.text_offset_x * preview_scale)),
+                        "text_offset_y": int(round(lbl.text_offset_y * preview_scale)),
+                        "font_size": max(6, int(round(lbl.font_size * preview_scale))),
                     })
                     for lbl in state.pipeline.project.labels
                     if lbl.ref_frame_index == frame_idx
