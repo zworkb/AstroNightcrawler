@@ -1508,15 +1508,32 @@ def _refresh_labels_list(state: _RenderState) -> None:
 
 
 def _render_label_row(state: _RenderState, label: Label) -> None:
-    """One row in the labels list."""
+    """One row in the labels list.
+
+    Clicking the label's text or its (x, y) coords jumps the preview
+    to ``label.ref_frame_index`` — the frame the label was anchored
+    on. Edit/delete buttons keep their dedicated handlers (#154).
+    """
     with ui.row().classes("w-full items-center gap-2"):
         ui.html(
             f'<span style="display:inline-block;width:12px;height:12px;'
             f'background:{label.color};border-radius:50%"></span>',
         )
-        ui.label(label.text or "(empty)").classes("flex-grow text-sm")
-        ui.label(f"({int(label.x)},{int(label.y)})").classes(
-            "text-xs text-grey",
+        text_widget = ui.label(label.text or "(empty)").classes(
+            "flex-grow text-sm cursor-pointer hover:underline",
+        ).tooltip(
+            f"Klick → springt auf Frame {label.ref_frame_index}",
+        )
+        coord_widget = ui.label(f"({int(label.x)},{int(label.y)})").classes(
+            "text-xs text-grey cursor-pointer",
+        )
+        text_widget.on(
+            "click",
+            lambda l=label: _jump_to_label_frame(state, l),
+        )
+        coord_widget.on(
+            "click",
+            lambda l=label: _jump_to_label_frame(state, l),
         )
         ui.button(
             icon="edit",
@@ -1526,6 +1543,17 @@ def _render_label_row(state: _RenderState, label: Label) -> None:
             icon="delete", color="red",
             on_click=lambda l=label: _delete_label(state, l),
         ).props("flat dense")
+
+
+def _jump_to_label_frame(state: _RenderState, label: Label) -> None:
+    """Load the preview frame that owns ``label`` (its ref_frame_index)."""
+    if not state.pipeline:
+        return
+    frame_idx = label.ref_frame_index
+    if not (0 <= frame_idx < len(state.pipeline.frames)):
+        return
+    import asyncio
+    asyncio.create_task(_show_preview(state, frame_idx))
 
 
 def _delete_label(state: _RenderState, label: Label) -> None:
