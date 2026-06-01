@@ -268,6 +268,14 @@ class Label(BaseModel):
     text_offset_x: int = Field(default=12, description="Text offset from marker in px")
     text_offset_y: int = Field(default=0)
 
+    leader: Literal["none", "line", "arrow"] = Field(
+        default="none",
+        description=(
+            "Connect marker to text with a leader line. "
+            "'arrow' adds a small arrowhead at the marker end."
+        ),
+    )
+
     source: Literal["manual", "catalog"] = Field(default="manual")
     catalog_ra: float | None = Field(default=None, description="Original RA in degrees (catalog only)")
     catalog_dec: float | None = Field(default=None, description="Original Dec in degrees (catalog only)")

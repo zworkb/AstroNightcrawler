@@ -11,6 +11,7 @@ from src.models.project import (
     CapturePoint,
     CaptureSettings,
     ControlPoint,
+    Label,
     Project,
     SplinePath,
 )
@@ -81,3 +82,41 @@ class TestRenderPipeline:
         pipeline.render(output)
         assert output.exists()
         assert output.stat().st_size > 100
+
+
+def test_label_default_leader_is_none():
+    """New labels default to leader='none' so old manifests are unchanged."""
+    label = Label(
+        id="a", text="M27", ref_frame_index=0, x=100.0, y=50.0,
+    )
+    assert label.leader == "none"
+
+
+def test_label_round_trip_with_leader(tmp_path):
+    """A manifest with leader='arrow' loads and re-saves byte-identical."""
+    label = Label(
+        id="a", text="M27", ref_frame_index=0, x=100.0, y=50.0,
+        text_offset_x=80, text_offset_y=-40, leader="arrow",
+    )
+    project = Project(
+        project="t",
+        path=SplinePath(control_points=[]),
+        capture_settings=CaptureSettings(),
+        capture_points=[CapturePoint(index=0, ra=100.0, dec=20.0)],
+        labels=[label],
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(project.model_dump_json(indent=2))
+    reloaded = Project.model_validate_json(manifest.read_text())
+    assert reloaded.labels[0].leader == "arrow"
+    assert reloaded.labels[0].text_offset_x == 80
+
+
+def test_label_loads_old_manifest_without_leader_field():
+    """An older manifest predating this field still loads (defaulted)."""
+    raw_json = (
+        '{"id":"a","text":"M27","ref_frame_index":0,'
+        '"x":100.0,"y":50.0,"text_offset_x":12,"text_offset_y":0}'
+    )
+    label = Label.model_validate_json(raw_json)
+    assert label.leader == "none"
