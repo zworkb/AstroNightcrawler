@@ -67,6 +67,7 @@ def test_draw_labels_with_leader_line_draws_pixels_between_marker_and_text():
         color="#ffffff", marker="dot",
         text_offset_x=150, text_offset_y=-60,
         leader="line",
+        offset_radius=0,
     )
     out = _draw_labels(
         img, labels=[label], offsets=[(0.0, 0.0)],
@@ -108,6 +109,7 @@ def test_draw_labels_with_leader_arrow_paints_arrowhead_at_marker():
         text_offset_x=150, text_offset_y=0,  # horizontal — arrow base is east of marker
         leader="arrow",
         font_size=24,
+        offset_radius=0,
     )
     out = _draw_labels(
         img, labels=[label], offsets=[(0.0, 0.0)],
@@ -134,6 +136,7 @@ def test_draw_labels_leader_line_has_no_arrowhead_extras():
         id="a", text="X", ref_frame_index=0,
         x=100.0, y=100.0, color="#ffffff", marker="none",
         text_offset_x=150, text_offset_y=0, font_size=24,
+        offset_radius=0,
     )
     arrow_label = Label(**base, leader="arrow")
     line_label = Label(**base, leader="line")
@@ -149,3 +152,33 @@ def test_draw_labels_leader_line_has_no_arrowhead_extras():
     # the horizontal centre; the line-only label has no pixels there).
     assert out_arrow[104, 105].max() > 0
     assert out_line[104, 105].max() == 0
+
+
+def test_draw_labels_leader_offset_radius_clears_endpoints():
+    """offset_radius>0 leaves empty space around both target and text."""
+    img_gap = _blank(width=600, height=200)
+    img_nogap = _blank(width=600, height=200)
+    base = dict(
+        id="a", text="X", ref_frame_index=0,
+        x=100.0, y=100.0, color="#ffffff", marker="none",
+        text_offset_x=400, text_offset_y=0, font_size=24,
+        leader="line",
+    )
+    label_gap = Label(**base, offset_radius=50)
+    label_nogap = Label(**base, offset_radius=0)
+    out_gap = _draw_labels(
+        img_gap, labels=[label_gap], offsets=[(0.0, 0.0)],
+        frame_dims=(600, 200),
+    )
+    out_nogap = _draw_labels(
+        img_nogap, labels=[label_nogap], offsets=[(0.0, 0.0)],
+        frame_dims=(600, 200),
+    )
+    # 20 px past the target the no-gap line is lit but the gap line
+    # isn't — the gap=50 cleared the 50-px zone around the marker.
+    assert out_nogap[100, 120].max() > 0
+    assert out_gap[100, 120].max() == 0
+    # The midpoint between marker (100, 100) and text-anchor (500, 100)
+    # is at (300, 100). The gap-line is still lit there (well inside
+    # the visible middle segment).
+    assert out_gap[100, 300].max() > 0

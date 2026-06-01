@@ -275,6 +275,18 @@ class Label(BaseModel):
             "'arrow' adds a small arrowhead at the marker end."
         ),
     )
+    offset_radius: int = Field(
+        default=50,
+        ge=0,
+        le=500,
+        description=(
+            "For leader-line labels: pixel radius of empty space around "
+            "both endpoints (target and text). The drawn line floats "
+            "between the target and the text instead of touching either, "
+            "so the leader-line doesn't obscure the object it's pointing "
+            "at. Ignored when leader='none'."
+        ),
+    )
 
     source: Literal["manual", "catalog"] = Field(default="manual")
     catalog_ra: float | None = Field(default=None, description="Original RA in degrees (catalog only)")

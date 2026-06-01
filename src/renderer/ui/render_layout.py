@@ -1461,7 +1461,6 @@ def _build_labels_panel(state: _RenderState) -> None:
     with ui.expansion("Labels", icon="label").classes("w-full") as exp:
         state.labels_panel = exp
         with ui.column().classes("w-full gap-1"):
-            state.labels_list_container = ui.column().classes("w-full gap-1")
             with ui.row().classes("w-full items-center justify-end gap-3"):
                 state.catalog_modifier_checkbox = ui.checkbox(
                     "Catalog",
@@ -1482,6 +1481,7 @@ def _build_labels_panel(state: _RenderState) -> None:
                     on_click=lambda: _arm_add_label(state),
                 ).props("dense flat")
                 _refresh_add_label_tooltip(state)
+            state.labels_list_container = ui.column().classes("w-full gap-1")
         _refresh_labels_list(state)
 
 
@@ -1553,6 +1553,14 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
             {"none": "no leader", "line": "line", "arrow": "arrow"},
             value=label.leader, label="Leader",
         )
+        offset_radius_in = ui.number(
+            "Offset radius (px)", value=label.offset_radius,
+            min=0, max=500,
+        ).tooltip(
+            "Pixel-Abstand zwischen Linie und Target/Text — verhindert "
+            "dass die Linie das Objekt überdeckt. Ignoriert bei "
+            "leader='none'.",
+        )
         with ui.row().classes("w-full justify-end"):
             ui.button("Cancel", on_click=dialog.close).props("flat")
 
@@ -1562,6 +1570,7 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
                 label.font_size = int(font_size_in.value or 24)
                 label.marker = marker_in.value or "dot"
                 label.leader = leader_in.value or "none"
+                label.offset_radius = int(offset_radius_in.value or 0)
                 _persist_project(state)
                 _refresh_labels_list(state)
                 _schedule_preview_refresh(state)
@@ -2278,7 +2287,15 @@ def _open_create_dialog(
         (catalog_meta.get("catalog_name") or catalog_meta.get("catalog_id") or "?")
         if catalog_meta else "Label"
     )
-    default_marker = "circle" if catalog_meta else "dot"
+    # With a leader line the marker is redundant — the line already
+    # points at the target. Default to no marker so the target stays
+    # visible (#154 follow-up).
+    if leader_default != "none":
+        default_marker = "none"
+    elif catalog_meta:
+        default_marker = "circle"
+    else:
+        default_marker = "dot"
 
     with ui.dialog() as dialog, ui.card().classes("w-80"):
         ui.label("New label").classes("text-md font-bold")

@@ -214,21 +214,27 @@ def _draw_leader(
     style: str,
     color: str,
     font_size: int,
+    offset_radius: float = 0.0,
 ) -> None:
     """Draw a leader line/arrow from marker to text bbox edge.
 
     Endpoints:
-      * Marker end: the marker centre (subsequent marker draw overpaints
-        the line's near end so we don't need to compute the marker's
-        outer radius here).
+      * Marker end: the marker centre, OR — when ``offset_radius > 0``
+        — a point ``offset_radius`` pixels along the line toward the
+        text. Keeps the line from drawing over the marker glyph.
       * Text end: the point on the text bbox edge closest to the
         marker — computed by ray-clipping marker→text-centre at the
-        bbox.
+        bbox. Also pulled back by ``offset_radius`` so the line doesn't
+        touch the rendered text.
 
     Style:
       * "line" — plain segment.
-      * "arrow" — segment plus a filled triangle at the marker end
-        pointing AT the marker.
+      * "arrow" — segment plus a filled triangle whose tip sits at the
+        line's marker-end (pointing AT the target through the gap).
+
+    When the total marker→text-edge distance is less than twice the
+    offset radius the line would invert; we clamp the per-side gap to
+    half the length in that case.
     """
     import math
 
@@ -259,24 +265,42 @@ def _draw_leader(
             best_t = t
             text_end_x, text_end_y = ix, iy
 
+    # Unit vector along the line (marker → text).
+    line_dx = text_end_x - marker_x
+    line_dy = text_end_y - marker_y
+    line_len = math.hypot(line_dx, line_dy)
+    if line_len <= 1.0:
+        return
+    ux, uy = line_dx / line_len, line_dy / line_len
+
+    # Per-side gap, clamped so the line doesn't invert when very short.
+    gap = max(0.0, float(offset_radius))
+    if 2 * gap >= line_len:
+        gap = line_len / 2.0
+    line_start_x = marker_x + ux * gap
+    line_start_y = marker_y + uy * gap
+    line_end_x = text_end_x - ux * gap
+    line_end_y = text_end_y - uy * gap
+
     width = max(1, font_size // 12)
     draw.line(
-        [(marker_x, marker_y), (text_end_x, text_end_y)],
+        [(line_start_x, line_start_y), (line_end_x, line_end_y)],
         fill=color, width=width,
     )
 
     if style == "arrow":
         length = max(4.0, font_size / 3.0)
         half_w = max(2.0, font_size / 4.0)
-        norm = math.hypot(dx, dy)
-        ux, uy = dx / norm, dy / norm
-        base_x = marker_x + ux * length
-        base_y = marker_y + uy * length
+        # Arrow tip sits at the line's marker-end (i.e. ``gap`` pixels
+        # away from the actual target); base further along toward text.
+        tip_x, tip_y = line_start_x, line_start_y
+        base_x = tip_x + ux * length
+        base_y = tip_y + uy * length
         px_, py_ = -uy, ux
         corner1 = (base_x + px_ * half_w, base_y + py_ * half_w)
         corner2 = (base_x - px_ * half_w, base_y - py_ * half_w)
         draw.polygon(
-            [(marker_x, marker_y), corner1, corner2],
+            [(tip_x, tip_y), corner1, corner2],
             fill=color,
         )
 
@@ -342,6 +366,7 @@ def _draw_labels(
                     draw_anchor_x, draw_anchor_y,
                     text_w, text_h,
                     label.leader, label.color, label.font_size,
+                    offset_radius=float(label.offset_radius),
                 )
                 draw.text(
                     (draw_anchor_x, draw_anchor_y),
