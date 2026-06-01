@@ -1487,35 +1487,27 @@ def _build_labels_panel(state: _RenderState) -> None:
         state.labels_panel = exp
         with ui.column().classes("w-full gap-1"):
             state.labels_list_container = ui.column().classes("w-full gap-1")
-            with ui.row().classes("w-full justify-end gap-2"):
-                # Issue #152: catalog-mode toggle replaces the old manual
-                # catalog popover (delete). When active, the JS overlay
-                # captures hover/click on the preview and emits a
-                # ``catalog_label_click`` event with the nearest catalog
-                # object's id/ra/dec. The Add-label button is unchanged
-                # and remains a separate code path.
-                state.catalog_mode_button = ui.button(
-                    "Catalog mode", icon="search",
-                    on_click=lambda: _toggle_catalog_mode(state),
-                ).props("dense flat").tooltip(
-                    "Catalog click mode — Hover zeigt nähstes Objekt, "
-                    "Klick platziert Label",
+            with ui.row().classes("w-full items-center justify-end gap-3"):
+                state.catalog_modifier_checkbox = ui.checkbox(
+                    "Catalog",
+                    value=state.catalog_modifier_active,
+                    on_change=lambda e: _toggle_catalog_modifier(state, e.value),
+                ).props("dense").tooltip(
+                    "Beim Klicken aufs nächste Catalog-Objekt im FOV snappen",
                 )
-                state.leader_button = ui.button(
-                    "Leader label", icon="call_made",
-                    on_click=lambda: _toggle_leader_mode(state),
-                ).props("dense flat").tooltip(
-                    "Leader-Line label: 1. Klick = Target, 2. Klick = "
-                    "Textposition; bei Klick nahe einem Catalog-Objekt "
-                    "wird der Text platziert und die Linie zum Objekt gezogen.",
+                state.leader_modifier_checkbox = ui.checkbox(
+                    "Leader",
+                    value=state.leader_modifier_active,
+                    on_change=lambda e: _toggle_leader_modifier(state, e.value),
+                ).props("dense").tooltip(
+                    "Leader-Linie zwischen Marker und Text zeichnen",
                 )
-                ui.button(
+                state.add_label_button = ui.button(
                     "Add label", icon="add",
-                    on_click=lambda: _toggle_click_to_add(state),
+                    on_click=lambda: _arm_add_label(state),
                 ).props("dense flat")
+                _refresh_add_label_tooltip(state)
         _refresh_labels_list(state)
-        _apply_catalog_mode_button(state)
-        _apply_leader_button(state)
 
 
 def _refresh_labels_list(state: _RenderState) -> None:
@@ -1604,82 +1596,85 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
     dialog.open()
 
 
-def _toggle_catalog_mode(state: _RenderState) -> None:
-    """Flip the catalog-mode toggle and push the new state to the overlay.
+def _toggle_catalog_modifier(state: _RenderState, checked: bool) -> None:
+    """Persist the Catalog modifier state and refresh the JS overlay.
 
-    Active = JS overlay grabs pointermove + click, shows the
-    floating tooltip with the nearest catalog object, and emits
-    ``catalog_label_click`` on click. Inactive = overlay is
-    transparent and pointer-events-none, so all clicks fall through
-    to the underlying preview image and the existing Add-label
-    behaviour is untouched (issue #152).
+    Catalog modifier on → next Add-Label click snaps the marker to
+    the nearest catalog object in the current FOV. Pre-loading the
+    FOV slice keeps the snap responsive (no first-click stall).
     """
-    state.catalog_modifier_active = not state.catalog_modifier_active
-    if state.catalog_modifier_active:
-        # Exclusivity: turn the other two off so the JS overlay knows
-        # whose click to deliver.
-        state.leader_modifier_active = False
-        state.click_to_add_active = False
+    state.catalog_modifier_active = bool(checked)
     _save_render_state(state)
-    _apply_catalog_mode_button(state)
-    _apply_leader_button(state)
-    _push_catalog_overlay_state(state)
-    # Refresh the FOV-slice for the currently-selected frame so the
-    # overlay has data on first enable.
+    _push_overlay_state(state)
+    _refresh_add_label_tooltip(state)
     if state.catalog_modifier_active:
         _refresh_catalog_fov_slice(state)
 
 
-def _apply_catalog_mode_button(state: _RenderState) -> None:
-    """Visually highlight the catalog-mode button when active."""
-    btn = state.catalog_mode_button
+def _toggle_leader_modifier(state: _RenderState, checked: bool) -> None:
+    """Persist the Leader modifier state and refresh the JS overlay."""
+    state.leader_modifier_active = bool(checked)
+    _save_render_state(state)
+    _push_overlay_state(state)
+    _refresh_add_label_tooltip(state)
+
+
+def _arm_add_label(state: _RenderState) -> None:
+    """Enter one-shot Add-Label mode (#154).
+
+    Sets ``click_to_add_active=True`` so the JS overlay routes the
+    next click(s) into ``label_placement`` events. After the dialog
+    closes (Save or Cancel) the caller invokes ``_disarm_add_label``
+    so the next preview click falls through to normal behaviour.
+    """
+    state.click_to_add_active = True
+    state.pending_placement = None
+    _push_overlay_state(state)
+    _refresh_add_label_button_visual(state)
+    if state.catalog_modifier_active:
+        _refresh_catalog_fov_slice(state)
+
+
+def _disarm_add_label(state: _RenderState) -> None:
+    """Exit Add-Label mode without committing anything."""
+    state.click_to_add_active = False
+    state.pending_placement = None
+    _push_overlay_state(state)
+    _refresh_add_label_button_visual(state)
+
+
+def _refresh_add_label_button_visual(state: _RenderState) -> None:
+    """Highlight the Add-Label button while it's armed."""
+    btn = state.add_label_button
     if btn is None:
         return
     try:
-        if state.catalog_modifier_active:
+        if state.click_to_add_active:
             btn.props("dense color=primary")
         else:
             btn.props("dense flat")
     except RuntimeError:
-        # Client closed mid-update — safe to ignore.
         pass
 
 
-def _toggle_leader_mode(state: _RenderState) -> None:
-    """Toggle leader-line placement mode.
-
-    Mutually exclusive with Catalog mode and click-to-add — the JS
-    overlay owns only one mode at a time. Persisted to app.storage so
-    the toggle survives a reload.
-    """
-    state.leader_modifier_active = not state.leader_modifier_active
-    if state.leader_modifier_active:
-        # Exclusivity: turn the other two off so the JS overlay knows
-        # whose click to deliver.
-        state.catalog_modifier_active = False
-        state.click_to_add_active = False
-    _save_render_state(state)
-    _apply_leader_button(state)
-    _apply_catalog_mode_button(state)
-    _push_catalog_overlay_state(state)
-    # Pre-load the FOV slice so the catalog-snap path (Task 6) has
-    # data available without the user enabling Catalog Mode first.
-    if state.leader_modifier_active:
-        _refresh_catalog_fov_slice(state)
-
-
-def _apply_leader_button(state: _RenderState) -> None:
-    """Highlight the Leader button when active."""
-    btn = state.leader_button
+def _refresh_add_label_tooltip(state: _RenderState) -> None:
+    """Tooltip describes the current modifier combo's behaviour."""
+    btn = state.add_label_button
     if btn is None:
         return
+    cat = state.catalog_modifier_active
+    leader = state.leader_modifier_active
+    if cat and leader:
+        msg = "1 Klick → Text platzieren, Leader-Linie zum nächsten Catalog-Objekt"
+    elif cat:
+        msg = "1 Klick → Label am nächsten Catalog-Objekt im FOV"
+    elif leader:
+        msg = "2 Klicks → 1. Target, 2. Textposition, mit Leader-Linie"
+    else:
+        msg = "1 Klick → Label an Klick-Position"
     try:
-        if state.leader_modifier_active:
-            btn.props("dense color=primary")
-        else:
-            btn.props("dense flat")
+        btn.tooltip(msg)
     except RuntimeError:
-        # Client closed mid-update — safe to ignore (same as catalog btn).
         pass
 
 
@@ -2315,31 +2310,10 @@ def _catalog_overlay_script(overlay_id: str) -> str:
 
 
 def _toggle_click_to_add(state: _RenderState) -> None:
-    """Enter / leave click-to-add mode.
-
-    While active, a click on the preview opens the new-label popover with
-    the click position pre-filled. The preview cursor turns into a
-    crosshair to make the mode visually obvious.
-    """
-    state.click_to_add_active = not state.click_to_add_active
-    if state.click_to_add_active:
-        # Exclusivity: turn the other two off so the JS overlay knows
-        # whose click to deliver.
-        state.catalog_modifier_active = False
-        state.leader_modifier_active = False
-        ui.notify(
-            "Click anywhere on the preview to add a label",
-            type="info", timeout=3000,
-        )
-        if state.preview:
-            state.preview.classes(add="cursor-crosshair")
-    else:
-        if state.preview:
-            state.preview.classes(remove="cursor-crosshair")
-    _save_render_state(state)
-    _apply_catalog_mode_button(state)
-    _apply_leader_button(state)
-    _push_catalog_overlay_state(state)
+    """DEPRECATED: replaced by _arm_add_label (#154). Kept as a stub so
+    any stale on_click bindings don't crash; safe to delete in the
+    final cleanup task."""
+    return
 
 
 def _apply_preview_mode(state: _RenderState) -> None:
@@ -2578,6 +2552,10 @@ class _RenderState:
         self.labels_panel: ui.expansion | None = None
         self.labels_list_container: ui.column | None = None
         self.click_to_add_active: bool = False
+        # Holds the first click of a two-click leader placement; cleared
+        # when the second click arrives, ESC cancels, or Add-Label
+        # disarms. Runtime-only — never persisted.
+        self.pending_placement: tuple[float, float] | None = None
         # Add-label modifiers (issue #154). Catalog and Leader used to
         # be exclusive modes (#152, #153) — they're now persistent
         # checkboxes that shape what the one-shot "Add Label" button
@@ -2598,9 +2576,10 @@ class _RenderState:
             stored.pop(legacy, None)
         self.catalog_overlay_id: str = ""
         self.catalog_overlay: ui.element | None = None
-        self.catalog_mode_button: ui.button | None = None
+        self.catalog_modifier_checkbox: ui.checkbox | None = None
+        self.leader_modifier_checkbox: ui.checkbox | None = None
+        self.add_label_button: ui.button | None = None
         self.catalog_fov_cache: dict[int, dict] = {}
-        self.leader_button: ui.button | None = None
         # Preview display mode (issue #148). False = compact (max-h-96,
         # fast overview); True = detail (native size, scrollable — for
         # pixel-precise label placement on high-res frames).
@@ -2741,8 +2720,7 @@ async def _load(state: _RenderState) -> None:
             # overlay now that a project is loaded (issue #152). Also
             # primes the FOV-slice if mode was already on from a prior
             # session — saves the user a second click.
-            _apply_catalog_mode_button(state)
-            _push_catalog_overlay_state(state)
+            _push_overlay_state(state)
             if state.catalog_modifier_active:
                 _refresh_catalog_fov_slice(state)
             ui.notify(f"Ready — {n} frames loaded")
@@ -3115,3 +3093,10 @@ def _set_render_status(
         state.status_label.text = text
     if state.progress:
         state.progress.value = progress
+
+
+# Temporary forwarder — Task 4+5 will replace _push_catalog_overlay_state
+# with the unified _push_overlay_state. Until then, route the new name
+# at the old function so the toolbar still pushes JS state correctly.
+def _push_overlay_state(state: _RenderState) -> None:
+    _push_catalog_overlay_state(state)
