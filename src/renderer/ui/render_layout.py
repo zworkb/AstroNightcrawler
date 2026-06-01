@@ -1512,9 +1512,14 @@ def _render_label_row(state: _RenderState, label: Label) -> None:
 
     Clicking the label's text or its (x, y) coords jumps the preview
     to ``label.ref_frame_index`` — the frame the label was anchored
-    on. Edit/delete buttons keep their dedicated handlers (#154).
+    on. The clicked row gets a subtle background tint so the user
+    sees which label is currently 'in focus'. Edit/delete buttons
+    keep their dedicated handlers (#154).
     """
-    with ui.row().classes("w-full items-center gap-2"):
+    row_classes = "w-full items-center gap-2 rounded"
+    if state.selected_label_id == label.id:
+        row_classes += " bg-blue-grey-8 px-2"
+    with ui.row().classes(row_classes):
         ui.html(
             f'<span style="display:inline-block;width:12px;height:12px;'
             f'background:{label.color};border-radius:50%"></span>',
@@ -1546,7 +1551,14 @@ def _render_label_row(state: _RenderState, label: Label) -> None:
 
 
 def _jump_to_label_frame(state: _RenderState, label: Label) -> None:
-    """Load the preview frame that owns ``label`` (its ref_frame_index)."""
+    """Load the preview frame that owns ``label`` (its ref_frame_index).
+
+    Also highlights the row in the labels list as the currently-active
+    selection so the user can see at a glance which label they last
+    navigated to.
+    """
+    state.selected_label_id = label.id
+    _refresh_labels_list(state)
     if not state.pipeline:
         return
     frame_idx = label.ref_frame_index
@@ -2525,6 +2537,10 @@ class _RenderState:
         # into a ``label_placement`` event.
         self.labels_panel: ui.expansion | None = None
         self.labels_list_container: ui.column | None = None
+        # ID of the row currently highlighted in the labels list — set
+        # when the user clicks a row (#154 follow-up). Ephemeral: not
+        # persisted, resets to ``None`` on page reload.
+        self.selected_label_id: str | None = None
         self.click_to_add_active: bool = False
         # Holds the first click of a two-click leader placement; cleared
         # when the second click arrives, ESC cancels, or Add-Label
