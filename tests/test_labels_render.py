@@ -72,12 +72,12 @@ def test_draw_labels_with_leader_line_draws_pixels_between_marker_and_text():
         img, labels=[label], offsets=[(0.0, 0.0)],
         frame_dims=(400, 200),
     )
-    # Pixel halfway between marker (100, 100) and text-anchor (250, 40)
-    # should be lit by the leader line.
-    midx, midy = 175, 70
-    assert out[midy, midx].max() > 0, (
-        f"expected leader pixels around ({midx},{midy}), got {out[midy, midx]}"
-    )
+    # Check a 5×10 region around the geometric midpoint between marker
+    # (100, 100) and the bbox-edge endpoint (≈250, 54).  The exact
+    # endpoint depends on font metrics, so we use a window rather than
+    # a single pixel to stay robust across systems.
+    region = out[68:78, 170:181]
+    assert region.max() > 0, f"expected pixels in mid region, got max {region.max()}"
 
 
 def test_draw_labels_leader_none_draws_no_pixels_between():
@@ -94,7 +94,5 @@ def test_draw_labels_leader_none_draws_no_pixels_between():
         img, labels=[label], offsets=[(0.0, 0.0)],
         frame_dims=(400, 200),
     )
-    midx, midy = 175, 70
-    assert out[midy, midx].max() == 0, (
-        f"unexpected pixel at midpoint with leader='none': {out[midy, midx]}"
-    )
+    region = out[68:78, 170:181]
+    assert region.max() == 0, f"unexpected pixel with leader='none': {region.max()}"

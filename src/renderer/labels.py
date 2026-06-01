@@ -209,36 +209,59 @@ def _draw_leader(
     marker_y: float,
     text_x: float,
     text_y: float,
+    text_w: int,
+    text_h: int,
     style: str,
     color: str,
     font_size: int,
 ) -> None:
-    """Draw a leader line/arrow from the marker to the text anchor.
+    """Draw a leader line/arrow from marker to text bbox edge.
 
     Endpoints:
-      * Marker end is the marker centre; the line gets clipped visually
-        by the marker's own fill in subsequent draw calls, so we don't
-        need to compute the marker's true outer radius here.
-      * Text end is the text anchor (top-left of the rendered text).
+      * Marker end: the marker centre (subsequent marker draw overpaints
+        the line's near end so we don't need to compute the marker's
+        outer radius here).
+      * Text end: the point on the text bbox edge closest to the
+        marker — computed by ray-clipping marker→text-centre at the
+        bbox.
 
     Style:
       * "line" — plain segment.
       * "arrow" — segment plus a filled triangle at the marker end
         pointing AT the marker.
-
-    Width scales with font size so a 12-px font gets a 1-px line and
-    a 60-px font gets a 5-px line.
     """
     import math
 
-    dx = text_x - marker_x
-    dy = text_y - marker_y
+    bx0, by0 = text_x, text_y
+    bx1, by1 = text_x + text_w, text_y + text_h
+    cx, cy = (bx0 + bx1) / 2.0, (by0 + by1) / 2.0
+
+    dx = cx - marker_x
+    dy = cy - marker_y
     if dx == 0.0 and dy == 0.0:
         return
 
+    t_candidates = []
+    if dx != 0.0:
+        t_candidates.append((bx0 - marker_x) / dx)
+        t_candidates.append((bx1 - marker_x) / dx)
+    if dy != 0.0:
+        t_candidates.append((by0 - marker_y) / dy)
+        t_candidates.append((by1 - marker_y) / dy)
+    text_end_x, text_end_y = cx, cy
+    best_t = float("inf")
+    for t in t_candidates:
+        if t <= 0.0 or t > 1.0:
+            continue
+        ix = marker_x + t * dx
+        iy = marker_y + t * dy
+        if (bx0 - 0.5 <= ix <= bx1 + 0.5) and (by0 - 0.5 <= iy <= by1 + 0.5) and t < best_t:
+            best_t = t
+            text_end_x, text_end_y = ix, iy
+
     width = max(1, font_size // 12)
     draw.line(
-        [(marker_x, marker_y), (text_x, text_y)],
+        [(marker_x, marker_y), (text_end_x, text_end_y)],
         fill=color, width=width,
     )
 
@@ -303,8 +326,12 @@ def _draw_labels(
             tx = px + label.text_offset_x
             ty = py + label.text_offset_y
             if label.leader != "none":
+                bbox = font.getbbox(label.text)
+                text_w = bbox[2] - bbox[0]
+                text_h = bbox[3] - bbox[1]
                 _draw_leader(
                     draw, px, py, tx, ty,
+                    text_w, text_h,
                     label.leader, label.color, label.font_size,
                 )
             draw.text((tx, ty), label.text, fill=label.color, font=font)
