@@ -1608,8 +1608,14 @@ def _toggle_catalog_mode(state: _RenderState) -> None:
     behaviour is untouched (issue #152).
     """
     state.catalog_mode_active = not state.catalog_mode_active
+    if state.catalog_mode_active:
+        # Exclusivity: turn the other two off so the JS overlay knows
+        # whose click to deliver.
+        state.leader_mode_active = False
+        state.click_to_add_active = False
     _save_render_state(state)
     _apply_catalog_mode_button(state)
+    _apply_leader_button(state)
     _push_catalog_overlay_state(state)
     # Refresh the FOV-slice for the currently-selected frame so the
     # overlay has data on first enable.
@@ -2093,6 +2099,10 @@ def _toggle_click_to_add(state: _RenderState) -> None:
     """
     state.click_to_add_active = not state.click_to_add_active
     if state.click_to_add_active:
+        # Exclusivity: turn the other two off so the JS overlay knows
+        # whose click to deliver.
+        state.catalog_mode_active = False
+        state.leader_mode_active = False
         ui.notify(
             "Click anywhere on the preview to add a label",
             type="info", timeout=3000,
@@ -2102,6 +2112,10 @@ def _toggle_click_to_add(state: _RenderState) -> None:
     else:
         if state.preview:
             state.preview.classes(remove="cursor-crosshair")
+    _save_render_state(state)
+    _apply_catalog_mode_button(state)
+    _apply_leader_button(state)
+    _push_catalog_overlay_state(state)
 
 
 def _apply_preview_mode(state: _RenderState) -> None:
