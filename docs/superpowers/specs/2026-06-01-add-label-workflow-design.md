@@ -24,7 +24,30 @@ those toggles. Treating Catalog and Leader as modifiers (the way
 keyboard modifiers like Shift/Ctrl shape a single primary action)
 collapses the surface area and removes the most common confusion.
 
-## 3. Toolbar layout
+## 3. Labels panel placement
+
+Move the entire `_build_labels_panel(...)` call from its current
+position (between filmstrip and output settings, around line 145)
+to **directly under the preview image** — i.e., before the stretch
+controls. Order becomes:
+
+1. Top bar (Browse / Load / Render)
+2. Preview image + overlay
+3. **Labels panel (NEW position)** ← collapsed by default, costs one
+   row of vertical space when not in use
+4. Stretch controls
+5. Filmstrip
+6. Output settings
+7. Progress / status
+
+Rationale: placing the labels panel adjacent to the preview means
+the user doesn't have to scroll past stretch controls and filmstrip
+to reach the placement toolbar — they look at the preview, decide a
+label is needed, click the panel right below. Collapsed the panel
+is just a one-line `ui.expansion` header so it doesn't crowd the
+preview area visually.
+
+## 4. Toolbar layout
 
 A single row in the Labels panel:
 
@@ -48,12 +71,12 @@ visuals; their values persist across page reloads via
 `app.storage.general`. "Add Label" is ephemeral — never persisted.
 
 A tooltip on the "Add Label" button describes what the current
-modifier combination will do (see the matrix in §4) so the user can
+modifier combination will do (see the matrix in §5) so the user can
 sanity-check before clicking. Example: with both modifiers checked,
 the tooltip reads "1 Klick → Text platzieren, Leader-Linie zum
 nächsten Catalog-Objekt im FOV".
 
-## 4. Click-behaviour matrix
+## 5. Click-behaviour matrix
 
 Modifiers determine the click sequence and the prefilled dialog
 defaults:
@@ -70,7 +93,7 @@ the prefilled values; the user reviews/edits and presses Save (label
 committed) or Cancel (no label). Either button closes the dialog
 *and* disarms Add Label.
 
-## 5. Dialog
+## 6. Dialog
 
 Reuse the existing label-edit dialog (`_open_edit_popover` in
 `src/renderer/ui/render_layout.py`) with the prefilled values from
@@ -91,7 +114,7 @@ catalog_obj_or_none, leader_default)`. The existing edit-dialog
 function gets a parallel "create" variant that shares its UI but
 constructs a new label on Save.
 
-## 6. State model
+## 7. State model
 
 **New `_RenderState` fields**:
 
@@ -129,7 +152,7 @@ constructs a new label on Save.
   overlay click capture, update button visuals (highlight when armed)
 - `_disarm_add_label(state)` — set False, clear overlay, update visuals
 
-## 7. JS overlay dispatch
+## 8. JS overlay dispatch
 
 The JS overlay (in `_catalog_overlay_script`) currently has
 `state.mode = 'catalog' | 'leader'`. Replace with three flags pushed
@@ -190,7 +213,7 @@ Single emitted event name (`label_placement`) replaces the three
 separate ones. Payload carries `kind` for the Python handler to
 branch on.
 
-## 8. Python click handler
+## 9. Python click handler
 
 A single function `_handle_label_placement(state, event)` replaces
 `_handle_catalog_click`, `_handle_leader_click`, and
@@ -208,7 +231,7 @@ The dialog's Save handler constructs the `Label` from the dialog
 fields plus the position info passed in. The Cancel handler just
 closes the dialog. Both also disarm Add Label.
 
-## 9. ESC
+## 10. ESC
 
 Two ESC paths:
 
@@ -218,13 +241,13 @@ Two ESC paths:
    fresh first click. This is a "cancel the in-progress click
    sequence" not a "cancel Add Label".
 2. **During the dialog**: ESC is the NiceGUI dialog's built-in close
-   shortcut, which triggers Cancel (per §8 — disarms Add Label).
+   shortcut, which triggers Cancel (per §9 — disarms Add Label).
 
 These are wired separately. The first lives in the JS overlay
 (`document` keydown listener already added in #153 follow-up); the
 second is NiceGUI's default.
 
-## 10. Soft-migration
+## 11. Soft-migration
 
 On the first session start after upgrade, read the legacy
 `catalog_mode_active` and `leader_mode_active` keys from
@@ -237,7 +260,7 @@ Implementation lives in `_RenderState.__init__` (or a dedicated
 `_maybe_soft_migrate_modifiers` helper) — runs once at app start
 when `_RenderState` first reads from storage.
 
-## 11. Edge cases
+## 12. Edge cases
 
 - **No catalog objects in FOV with Catalog modifier on**: `snapNearest`
   returns `null`. The click is treated as if Catalog modifier were
@@ -254,7 +277,7 @@ when `_RenderState` first reads from storage.
   immediately reflects the new modifier state. Useful for users who
   realize mid-arming "actually I want a catalog snap".
 
-## 12. Out of scope (v1)
+## 13. Out of scope (v1)
 
 - Continuous "keep mode" for rapid-fire placement of many labels
   (covered by a separate future issue if needed).
@@ -263,7 +286,7 @@ when `_RenderState` first reads from storage.
   current button-highlight conventions.
 - Custom snap distance threshold for Catalog modifier.
 
-## 13. Testing
+## 14. Testing
 
 The toolbar UI itself has no unit tests today; the existing renderer
 and model tests stay green. New testing scope:
@@ -275,7 +298,7 @@ and model tests stay green. New testing scope:
 - **Smoke checklist**: a manual end-to-end pass exercising all four
   modifier combos, ESC handling, and post-Save/post-Cancel state.
 
-## 14. Implementation order
+## 15. Implementation order
 
 1. **State refactor**: rename fields, add migration. Tests green.
 2. **Toolbar UI**: replace three buttons with two checkboxes + one
