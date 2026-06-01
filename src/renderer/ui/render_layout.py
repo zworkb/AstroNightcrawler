@@ -1564,16 +1564,25 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
             "dass die Linie das Objekt überdeckt. Ignoriert bei "
             "leader='none'.",
         )
+        # Force set_value so widget.value isn't None on untouched fields
+        # (same Quasar binding gotcha as in the create dialog).
+        font_size_in.set_value(label.font_size)
+        offset_radius_in.set_value(label.offset_radius)
+
+        def _num(widget, fallback: int) -> int:
+            v = widget.value
+            return int(v) if v is not None else int(fallback)
+
         with ui.row().classes("w-full justify-end"):
             ui.button("Cancel", on_click=dialog.close).props("flat")
 
             def _save() -> None:
                 label.text = text_in.value or ""
-                label.color = color_in.value or "#ffff00"
-                label.font_size = int(font_size_in.value or 24)
+                label.color = color_in.value or label.color
+                label.font_size = _num(font_size_in, label.font_size)
                 label.marker = marker_in.value or "dot"
                 label.leader = leader_in.value or "none"
-                label.offset_radius = int(offset_radius_in.value or 0)
+                label.offset_radius = _num(offset_radius_in, label.offset_radius)
                 state.last_label_color = label.color
                 state.last_label_font_size = label.font_size
                 state.last_label_offset_radius = label.offset_radius
@@ -2327,6 +2336,19 @@ def _open_create_dialog(
             "dass die Linie das Objekt überdeckt. Ignoriert bei "
             "leader='none'.",
         )
+        # NiceGUI's ``ui.number(value=X)`` propagates X to the DOM but
+        # widget.value may still report None until the user actively
+        # edits the field — same Quasar/Vue binding gotcha as in #131.
+        # Force a Python-side ``set_value`` so reading ``.value`` in
+        # _save returns the prefill instead of None.
+        font_size_in.set_value(state.last_label_font_size)
+        offset_radius_in.set_value(state.last_label_offset_radius)
+
+        def _num(widget, fallback: int) -> int:
+            """Read a ``ui.number`` value, treating None as 'untouched'."""
+            v = widget.value
+            return int(v) if v is not None else int(fallback)
+
         with ui.row().classes("w-full justify-end"):
             def _cancel() -> None:
                 dialog.close()
@@ -2340,13 +2362,15 @@ def _open_create_dialog(
                     text=text_in.value or default_text,
                     ref_frame_index=ref_frame_index,
                     x=target_x, y=target_y,
-                    color=color_in.value or "#ffff00",
-                    font_size=int(font_size_in.value or 24),
+                    color=color_in.value or state.last_label_color,
+                    font_size=_num(font_size_in, state.last_label_font_size),
                     marker=marker_in.value or default_marker,
                     text_offset_x=int(round(text_x - target_x)),
                     text_offset_y=int(round(text_y - target_y)),
                     leader=leader_in.value or "none",
-                    offset_radius=int(offset_radius_in.value or 50),
+                    offset_radius=_num(
+                        offset_radius_in, state.last_label_offset_radius,
+                    ),
                     source="catalog" if catalog_meta else "manual",
                     catalog_id=(catalog_meta or {}).get("catalog_id"),
                     catalog_ra=(catalog_meta or {}).get("ra"),
