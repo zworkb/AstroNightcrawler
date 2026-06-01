@@ -116,6 +116,7 @@ def create_render_layout() -> None:
             _handle_catalog_click(state, e)
 
         ui.on("catalog_label_click", _on_catalog_click)
+        ui.on("leader_label_click", lambda e: _handle_leader_click(state, e))
         # NiceGUI 3.x ignores dotted-path args ("target.naturalWidth"), so
         # we use a js_handler to explicitly bundle everything we need into
         # one emit() call. Otherwise the natural / displayed dimensions
@@ -1678,15 +1679,18 @@ def _apply_leader_button(state: _RenderState) -> None:
 
 
 def _push_catalog_overlay_state(state: _RenderState) -> None:
-    """Tell the JS overlay whether catalog mode is on (toggles pointer events)."""
+    """Tell the JS overlay whether the overlay is on AND which mode."""
     overlay_id = state.catalog_overlay_id
     if not overlay_id:
         return
-    enabled = "true" if state.catalog_mode_active else "false"
+    enabled = "true" if (state.catalog_mode_active or state.leader_mode_active) else "false"
+    mode = "leader" if state.leader_mode_active else "catalog"
     try:
         ui.run_javascript(
             f"if (window.__catalogOverlaySetActive) "
-            f"{{ window.__catalogOverlaySetActive({overlay_id!r}, {enabled}); }}",
+            f"{{ window.__catalogOverlaySetActive({overlay_id!r}, {enabled}); }}\n"
+            f"if (window.__catalogOverlaySetMode) "
+            f"{{ window.__catalogOverlaySetMode({overlay_id!r}, {mode!r}); }}",
         )
     except RuntimeError:
         # No active client (e.g. headless / load before page ready).
@@ -1882,6 +1886,67 @@ def _handle_catalog_click(state: _RenderState, event) -> None:  # noqa: ANN001 �
     _schedule_preview_refresh(state)
 
 
+def _handle_leader_click(state: _RenderState, event) -> None:  # noqa: ANN001 — NiceGUI event
+    """Persist a leader-line label when the JS overlay reports a click.
+
+    Two payload shapes:
+      * ``kind="manual"``: target + text are both raw pixel positions
+        from two consecutive clicks; the rubber-band line shown during
+        the second click's hover was just a preview.
+      * ``kind="catalog"``: single-click variant — target is a catalog
+        object's projected pixel, text is the click position; we also
+        record the ra/dec/id so the renderer can re-project the target
+        on alignment-shifted frames if needed.
+    """
+    if not state.pipeline or not state.pipeline.project:
+        return
+    args = event.args or {}
+    if isinstance(args, list) and args:
+        args = args[0]
+    if not isinstance(args, dict):
+        return
+    try:
+        kind = args.get("kind") or "manual"
+        target_x = float(args["target_x"])
+        target_y = float(args["target_y"])
+        text_x = float(args["text_x"])
+        text_y = float(args["text_y"])
+        ref_frame_index = int(args.get("ref_frame_index", state.selected_frame))
+    except (KeyError, TypeError, ValueError):
+        logger.warning("leader_label_click payload malformed: %r", args)
+        return
+
+    base_kwargs = dict(
+        id=str(uuid.uuid4()),
+        ref_frame_index=ref_frame_index,
+        x=target_x, y=target_y,
+        text_offset_x=int(round(text_x - target_x)),
+        text_offset_y=int(round(text_y - target_y)),
+        color="#ffff00",
+        marker="circle",
+        leader="line",
+    )
+    if kind == "catalog":
+        new_label = Label(
+            **base_kwargs,
+            text=args.get("catalog_name") or args.get("catalog_id") or "?",
+            source="catalog",
+            catalog_ra=float(args["ra"]),
+            catalog_dec=float(args["dec"]),
+            catalog_id=args.get("catalog_id") or None,
+        )
+    else:
+        new_label = Label(
+            **base_kwargs,
+            text="Label",
+            source="manual",
+        )
+    state.pipeline.project.labels.append(new_label)
+    _persist_project(state)
+    _refresh_labels_list(state)
+    _schedule_preview_refresh(state)
+
+
 def _catalog_overlay_script(overlay_id: str) -> str:
     """Vanilla-JS overlay: hover -> nearest-object tooltip, click -> emit event.
 
@@ -1900,8 +1965,9 @@ def _catalog_overlay_script(overlay_id: str) -> str:
   if (!window.__catalogOverlayState) window.__catalogOverlayState = {{}};
   const state = window.__catalogOverlayState[OVERLAY_ID] = (
     window.__catalogOverlayState[OVERLAY_ID]
-    || {{active: false, objects: [], frameIndex: 0,
-         natW: 0, natH: 0, tooltipEl: null}}
+    || {{active: false, mode: 'catalog', objects: [], frameIndex: 0,
+         natW: 0, natH: 0, tooltipEl: null,
+         leaderPending: null, leaderCanvas: null}}
   );
 
   function ensureTooltip(overlay) {{
@@ -1982,9 +2048,61 @@ def _catalog_overlay_script(overlay_id: str) -> str:
     return best ? {{obj: best, dist: Math.sqrt(bestD2)}} : null;
   }}
 
+  function ensureLeaderCanvas(overlay) {{
+    if (state.leaderCanvas && overlay.contains(state.leaderCanvas)) {{
+      const rect = overlay.getBoundingClientRect();
+      state.leaderCanvas.width = rect.width;
+      state.leaderCanvas.height = rect.height;
+      return state.leaderCanvas;
+    }}
+    const c = document.createElement('canvas');
+    const rect = overlay.getBoundingClientRect();
+    c.width = rect.width;
+    c.height = rect.height;
+    c.style.cssText = (
+      'position: absolute; top: 0; left: 0; pointer-events: none; '
+      + 'width: 100%; height: 100%;'
+    );
+    overlay.appendChild(c);
+    state.leaderCanvas = c;
+    return c;
+  }}
+
+  function projOrigToCss(overlay, origX, origY) {{
+    const rect = overlay.getBoundingClientRect();
+    const origW = (state.frameDims && state.frameDims[0]) || rect.width;
+    const origH = (state.frameDims && state.frameDims[1]) || rect.height;
+    return {{
+      cssX: origX * (rect.width / Math.max(1, origW)),
+      cssY: origY * (rect.height / Math.max(1, origH)),
+    }};
+  }}
+
+  function drawRubberBand(overlay, ev) {{
+    if (!state.leaderPending) return;
+    const c = ensureLeaderCanvas(overlay);
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    const rect = overlay.getBoundingClientRect();
+    const start = projOrigToCss(overlay, state.leaderPending.origX, state.leaderPending.origY);
+    ctx.strokeStyle = 'rgba(255, 255, 0, 0.9)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(start.cssX, start.cssY);
+    ctx.lineTo(ev.clientX - rect.left, ev.clientY - rect.top);
+    ctx.stroke();
+  }}
+
   function onMove(ev) {{
     const overlay = document.getElementById(OVERLAY_ID);
     if (!overlay || !state.active) return;
+    if (state.mode === 'leader') {{
+      if (state.leaderPending) {{
+        drawRubberBand(overlay, ev);
+      }}
+      if (state.tooltipEl) state.tooltipEl.style.display = 'none';
+      return;
+    }}
     if (!state.objects || state.objects.length === 0) {{
       const tip = ensureTooltip(overlay);
       tip.textContent = '(no catalog objects in FOV)';
@@ -2028,9 +2146,69 @@ def _catalog_overlay_script(overlay_id: str) -> str:
     if (state.tooltipEl) state.tooltipEl.style.display = 'none';
   }}
 
+  function clearRubberBand() {{
+    state.leaderPending = null;
+    if (state.leaderCanvas) {{
+      const ctx = state.leaderCanvas.getContext('2d');
+      ctx.clearRect(0, 0, state.leaderCanvas.width, state.leaderCanvas.height);
+    }}
+  }}
+
+  function emitLeaderClick(payload) {{
+    try {{
+      if (window.emitEvent) {{
+        window.emitEvent('leader_label_click', payload);
+      }}
+    }} catch (e) {{
+      console.warn('leader emit failed', e);
+    }}
+  }}
+
+  function onClickLeader(overlay, ev) {{
+    const proj = overlayToOrigPixel(overlay, ev);
+    const rect = overlay.getBoundingClientRect();
+    if (!state.leaderPending) {{
+      let snap = null;
+      if (state.objects && state.objects.length) {{
+        const hit = nearest(proj.origX, proj.origY);
+        if (hit) {{
+          const origW = (state.frameDims && state.frameDims[0]) || rect.width;
+          const snapOrigPx = 30 * (origW / Math.max(1, rect.width));
+          if (hit.dist <= snapOrigPx) snap = hit.obj;
+        }}
+      }}
+      if (snap) {{
+        emitLeaderClick({{
+          kind: 'catalog',
+          target_x: snap.pixel_x, target_y: snap.pixel_y,
+          text_x: proj.origX, text_y: proj.origY,
+          ref_frame_index: state.frameIndex,
+          catalog_id: snap.id, catalog_name: snap.name,
+          ra: snap.ra, dec: snap.dec,
+        }});
+        clearRubberBand();
+      }} else {{
+        state.leaderPending = {{origX: proj.origX, origY: proj.origY}};
+      }}
+      return;
+    }}
+    emitLeaderClick({{
+      kind: 'manual',
+      target_x: state.leaderPending.origX,
+      target_y: state.leaderPending.origY,
+      text_x: proj.origX, text_y: proj.origY,
+      ref_frame_index: state.frameIndex,
+    }});
+    clearRubberBand();
+  }}
+
   function onClick(ev) {{
     const overlay = document.getElementById(OVERLAY_ID);
     if (!overlay || !state.active) return;
+    if (state.mode === 'leader') {{
+      onClickLeader(overlay, ev);
+      return;
+    }}
     if (!state.objects || state.objects.length === 0) return;
     const proj = overlayToOrigPixel(overlay, ev);
     const hit = nearest(proj.origX, proj.origY);
@@ -2070,6 +2248,19 @@ def _catalog_overlay_script(overlay_id: str) -> str:
       if (!s) return;
       s.active = !!active;
       applyActive();
+    }};
+
+  window.__catalogOverlaySetMode = window.__catalogOverlaySetMode
+    || function(id, mode) {{
+      const s = window.__catalogOverlayState && window.__catalogOverlayState[id];
+      if (!s) return;
+      s.mode = mode;
+      s.leaderPending = null;
+      if (s.leaderCanvas) {{
+        const ctx = s.leaderCanvas.getContext('2d');
+        ctx.clearRect(0, 0, s.leaderCanvas.width, s.leaderCanvas.height);
+      }}
+      if (s.tooltipEl) s.tooltipEl.style.display = 'none';
     }};
 
   window.__catalogOverlaySetObjects = window.__catalogOverlaySetObjects
