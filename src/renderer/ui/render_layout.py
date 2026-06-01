@@ -1658,7 +1658,6 @@ def _toggle_leader_mode(state: _RenderState) -> None:
         # whose click to deliver.
         state.catalog_mode_active = False
         state.click_to_add_active = False
-    state.leader_pending_target = None
     _save_render_state(state)
     _apply_leader_button(state)
     _apply_catalog_mode_button(state)
@@ -2076,8 +2075,13 @@ def _catalog_overlay_script(overlay_id: str) -> str:
 
   function projOrigToCss(overlay, origX, origY) {{
     const rect = overlay.getBoundingClientRect();
-    const origW = (state.frameDims && state.frameDims[0]) || rect.width;
-    const origH = (state.frameDims && state.frameDims[1]) || rect.height;
+    const img = overlay.parentElement
+      ? overlay.parentElement.querySelector('img')
+      : null;
+    const natW = (img && img.naturalWidth) || rect.width;
+    const natH = (img && img.naturalHeight) || rect.height;
+    const origW = (state.frameDims && state.frameDims[0]) || natW;
+    const origH = (state.frameDims && state.frameDims[1]) || natH;
     return {{
       cssX: origX * (rect.width / Math.max(1, origW)),
       cssY: origY * (rect.height / Math.max(1, origH)),
@@ -2237,6 +2241,13 @@ def _catalog_overlay_script(overlay_id: str) -> str:
     }}
   }}
 
+  function onKeyDown(ev) {{
+    if (ev.key !== 'Escape') return;
+    if (state.mode !== 'leader' || !state.leaderPending) return;
+    clearRubberBand();
+    ev.preventDefault();
+  }}
+
   function attach() {{
     const overlay = document.getElementById(OVERLAY_ID);
     if (!overlay) {{ setTimeout(attach, 50); return; }}
@@ -2245,6 +2256,7 @@ def _catalog_overlay_script(overlay_id: str) -> str:
     overlay.addEventListener('pointermove', onMove);
     overlay.addEventListener('pointerleave', onLeave);
     overlay.addEventListener('click', onClick);
+    document.addEventListener('keydown', onKeyDown);
     applyActive();
   }}
 
@@ -2574,7 +2586,6 @@ class _RenderState:
             stored.get("leader_mode_active", False),
         )
         self.leader_button: ui.button | None = None
-        self.leader_pending_target: tuple[float, float] | None = None
         # Preview display mode (issue #148). False = compact (max-h-96,
         # fast overview); True = detail (native size, scrollable — for
         # pixel-precise label placement on high-res frames).
