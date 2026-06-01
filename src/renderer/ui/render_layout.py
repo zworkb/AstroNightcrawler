@@ -1606,8 +1606,7 @@ def _arm_add_label(state: _RenderState) -> None:
     state.pending_placement = None
     _push_overlay_state(state)
     _refresh_add_label_button_visual(state)
-    if state.catalog_modifier_active:
-        _refresh_catalog_fov_slice(state)
+    _refresh_catalog_fov_slice(state)
 
 
 def _disarm_add_label(state: _RenderState) -> None:
@@ -1684,7 +1683,9 @@ def _refresh_catalog_fov_slice(state: _RenderState) -> None:
     Cached per ``(frame_idx, catalog version)`` on ``state`` so
     re-selecting the same frame is essentially free (#152).
     """
-    if not (state.catalog_modifier_active or state.leader_modifier_active):
+    if not (state.catalog_modifier_active
+            or state.leader_modifier_active
+            or state.click_to_add_active):
         return
     pipeline = state.pipeline
     if pipeline is None or pipeline.project is None:
@@ -1896,10 +1897,8 @@ def _catalog_overlay_script(overlay_id: str) -> str:
     const natH = (img && img.naturalHeight) || dispH;
     const natX = cssX * (natW / dispW);
     const natY = cssY * (natH / dispH);
-    const origW = (state.objects && state.objects.length && state.frameDims)
-      ? state.frameDims[0] : natW;
-    const origH = (state.objects && state.objects.length && state.frameDims)
-      ? state.frameDims[1] : natH;
+    const origW = (state.frameDims && state.frameDims[0]) ? state.frameDims[0] : natW;
+    const origH = (state.frameDims && state.frameDims[1]) ? state.frameDims[1] : natH;
     const scale = origW / Math.max(1, natW);
     return {{
       origX: natX * scale,
@@ -2605,7 +2604,9 @@ async def _load(state: _RenderState) -> None:
             # primes the FOV-slice if mode was already on from a prior
             # session — saves the user a second click.
             _push_overlay_state(state)
-            if state.catalog_modifier_active:
+            if (state.catalog_modifier_active
+                    or state.leader_modifier_active
+                    or state.click_to_add_active):
                 _refresh_catalog_fov_slice(state)
             ui.notify(f"Ready — {n} frames loaded")
         except RuntimeError as exc:
@@ -2743,7 +2744,9 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
     _update_ref_frame_indicator(state)
     # Recompute the catalog FOV-slice for the new frame and ship it
     # to the JS overlay (issue #152). Cheap when cached.
-    if state.catalog_modifier_active:
+    if (state.catalog_modifier_active
+            or state.leader_modifier_active
+            or state.click_to_add_active):
         _refresh_catalog_fov_slice(state)
 
     # Keep the pipeline config in sync with state so the preview
