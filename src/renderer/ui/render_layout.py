@@ -1582,6 +1582,10 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
             ["none", "dot", "cross", "circle"],
             value=label.marker, label="Marker",
         )
+        leader_in = ui.select(
+            {"none": "no leader", "line": "line", "arrow": "arrow"},
+            value=label.leader, label="Leader",
+        )
         with ui.row().classes("w-full justify-end"):
             ui.button("Cancel", on_click=dialog.close).props("flat")
 
@@ -1590,8 +1594,10 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
                 label.color = color_in.value or "#ffff00"
                 label.font_size = int(font_size_in.value or 24)
                 label.marker = marker_in.value or "dot"
+                label.leader = leader_in.value or "none"
                 _persist_project(state)
                 _refresh_labels_list(state)
+                _schedule_preview_refresh(state)
                 dialog.close()
 
             ui.button("Save", color="primary", on_click=_save)
