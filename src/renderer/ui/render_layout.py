@@ -2070,6 +2070,7 @@ def _catalog_overlay_script(overlay_id: str) -> str:
         return;
       }}
       const hit = nearest(proj.origX, proj.origY);
+      if (!hit) return;
       if (state.leaderModifier) {{
         emitPlacement({{
           kind: 'catalog_leader',
@@ -2428,9 +2429,10 @@ class _RenderState:
         # Labels panel (issue #131). ``labels_panel`` is the outer
         # ``ui.expansion``; ``labels_list_container`` is the inner column
         # whose children are rebuilt by ``_refresh_labels_list``.
-        # ``click_to_add_active`` is flipped by ``_toggle_click_to_add``
-        # (#132): while True, a click on the preview opens the new-label
-        # popover with the click position pre-filled.
+        # ``click_to_add_active`` is the one-shot "Add Label armed"
+        # flag, flipped by ``_arm_add_label`` / ``_disarm_add_label``
+        # (#154). While True, the JS overlay routes the next click(s)
+        # into a ``label_placement`` event.
         self.labels_panel: ui.expansion | None = None
         self.labels_list_container: ui.column | None = None
         self.click_to_add_active: bool = False
