@@ -56,3 +56,45 @@ def test_draw_labels_offsets_length_must_match_labels():
     with pytest.raises(ValueError):
         _draw_labels(img, labels=[label], offsets=[],
                      frame_dims=(200, 100))
+
+
+def test_draw_labels_with_leader_line_draws_pixels_between_marker_and_text():
+    """leader='line' colors at least one pixel along the marker→text segment."""
+    img = _blank(width=400, height=200)
+    label = Label(
+        id="a", text="X", ref_frame_index=0,
+        x=100.0, y=100.0,
+        color="#ffffff", marker="dot",
+        text_offset_x=150, text_offset_y=-60,
+        leader="line",
+    )
+    out = _draw_labels(
+        img, labels=[label], offsets=[(0.0, 0.0)],
+        frame_dims=(400, 200),
+    )
+    # Pixel halfway between marker (100, 100) and text-anchor (250, 40)
+    # should be lit by the leader line.
+    midx, midy = 175, 70
+    assert out[midy, midx].max() > 0, (
+        f"expected leader pixels around ({midx},{midy}), got {out[midy, midx]}"
+    )
+
+
+def test_draw_labels_leader_none_draws_no_pixels_between():
+    """Default leader='none' must NOT light the midpoint."""
+    img = _blank(width=400, height=200)
+    label = Label(
+        id="a", text="X", ref_frame_index=0,
+        x=100.0, y=100.0,
+        color="#ffffff", marker="dot",
+        text_offset_x=150, text_offset_y=-60,
+        # leader omitted → defaults to "none"
+    )
+    out = _draw_labels(
+        img, labels=[label], offsets=[(0.0, 0.0)],
+        frame_dims=(400, 200),
+    )
+    midx, midy = 175, 70
+    assert out[midy, midx].max() == 0, (
+        f"unexpected pixel at midpoint with leader='none': {out[midy, midx]}"
+    )

@@ -203,6 +203,61 @@ def _draw_marker(
         )
 
 
+def _draw_leader(
+    draw: ImageDraw.ImageDraw,
+    marker_x: float,
+    marker_y: float,
+    text_x: float,
+    text_y: float,
+    style: str,
+    color: str,
+    font_size: int,
+) -> None:
+    """Draw a leader line/arrow from the marker to the text anchor.
+
+    Endpoints:
+      * Marker end is the marker centre; the line gets clipped visually
+        by the marker's own fill in subsequent draw calls, so we don't
+        need to compute the marker's true outer radius here.
+      * Text end is the text anchor (top-left of the rendered text).
+
+    Style:
+      * "line" — plain segment.
+      * "arrow" — segment plus a filled triangle at the marker end
+        pointing AT the marker.
+
+    Width scales with font size so a 12-px font gets a 1-px line and
+    a 60-px font gets a 5-px line.
+    """
+    import math
+
+    dx = text_x - marker_x
+    dy = text_y - marker_y
+    if dx == 0.0 and dy == 0.0:
+        return
+
+    width = max(1, font_size // 12)
+    draw.line(
+        [(marker_x, marker_y), (text_x, text_y)],
+        fill=color, width=width,
+    )
+
+    if style == "arrow":
+        length = max(4.0, font_size / 3.0)
+        half_w = max(2.0, font_size / 4.0)
+        norm = math.hypot(dx, dy)
+        ux, uy = dx / norm, dy / norm
+        base_x = marker_x + ux * length
+        base_y = marker_y + uy * length
+        px_, py_ = -uy, ux
+        corner1 = (base_x + px_ * half_w, base_y + py_ * half_w)
+        corner2 = (base_x - px_ * half_w, base_y - py_ * half_w)
+        draw.polygon(
+            [(marker_x, marker_y), corner1, corner2],
+            fill=color,
+        )
+
+
 def _draw_labels(
     frame: np.ndarray,
     labels: list[Label],
@@ -243,12 +298,17 @@ def _draw_labels(
         py = label.y - dy
         if not (0.0 <= px < width and 0.0 <= py < height):
             continue
-        _draw_marker(draw, px, py, label.marker, label.color)
         if label.text:
             font = _resolve_font(label.font_size)
             tx = px + label.text_offset_x
             ty = py + label.text_offset_y
+            if label.leader != "none":
+                _draw_leader(
+                    draw, px, py, tx, ty,
+                    label.leader, label.color, label.font_size,
+                )
             draw.text((tx, ty), label.text, fill=label.color, font=font)
+        _draw_marker(draw, px, py, label.marker, label.color)
         drew_any = True
 
     if not drew_any:
