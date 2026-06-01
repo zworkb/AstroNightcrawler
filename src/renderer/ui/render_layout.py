@@ -2310,6 +2310,13 @@ def _open_create_dialog(
             {"none": "no leader", "line": "line", "arrow": "arrow"},
             value=leader_default, label="Leader",
         )
+        offset_radius_in = ui.number(
+            "Offset radius (px)", value=50, min=0, max=500,
+        ).tooltip(
+            "Pixel-Abstand zwischen Linie und Target/Text — verhindert "
+            "dass die Linie das Objekt überdeckt. Ignoriert bei "
+            "leader='none'.",
+        )
         with ui.row().classes("w-full justify-end"):
             def _cancel() -> None:
                 dialog.close()
@@ -2329,6 +2336,7 @@ def _open_create_dialog(
                     text_offset_x=int(round(text_x - target_x)),
                     text_offset_y=int(round(text_y - target_y)),
                     leader=leader_in.value or "none",
+                    offset_radius=int(offset_radius_in.value or 50),
                     source="catalog" if catalog_meta else "manual",
                     catalog_id=(catalog_meta or {}).get("catalog_id"),
                     catalog_ra=(catalog_meta or {}).get("ra"),
