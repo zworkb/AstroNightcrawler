@@ -138,11 +138,11 @@ def create_render_layout() -> None:
                 });
             }""",
         )
+        _build_labels_panel(state)
         _build_stretch_controls(state)
         state.filmstrip = ui.row().classes(
             "w-full overflow-x-auto gap-1 py-2",
         )
-        _build_labels_panel(state)
         _build_output_settings(state)
         state.progress = ui.linear_progress(value=0).classes("w-full")
         state.status_label = ui.label("")
@@ -1300,8 +1300,8 @@ _APP_PERSISTED_FIELDS: tuple[str, ...] = (
     "output_path",
     "render_workers",
     "preview_detail_mode",
-    "catalog_mode_active",
-    "leader_mode_active",
+    "catalog_modifier_active",
+    "leader_modifier_active",
 )
 
 # Per-project fields — serialised into ``manifest.json`` via
@@ -1614,11 +1614,11 @@ def _toggle_catalog_mode(state: _RenderState) -> None:
     to the underlying preview image and the existing Add-label
     behaviour is untouched (issue #152).
     """
-    state.catalog_mode_active = not state.catalog_mode_active
-    if state.catalog_mode_active:
+    state.catalog_modifier_active = not state.catalog_modifier_active
+    if state.catalog_modifier_active:
         # Exclusivity: turn the other two off so the JS overlay knows
         # whose click to deliver.
-        state.leader_mode_active = False
+        state.leader_modifier_active = False
         state.click_to_add_active = False
     _save_render_state(state)
     _apply_catalog_mode_button(state)
@@ -1626,7 +1626,7 @@ def _toggle_catalog_mode(state: _RenderState) -> None:
     _push_catalog_overlay_state(state)
     # Refresh the FOV-slice for the currently-selected frame so the
     # overlay has data on first enable.
-    if state.catalog_mode_active:
+    if state.catalog_modifier_active:
         _refresh_catalog_fov_slice(state)
 
 
@@ -1636,7 +1636,7 @@ def _apply_catalog_mode_button(state: _RenderState) -> None:
     if btn is None:
         return
     try:
-        if state.catalog_mode_active:
+        if state.catalog_modifier_active:
             btn.props("dense color=primary")
         else:
             btn.props("dense flat")
@@ -1652,11 +1652,11 @@ def _toggle_leader_mode(state: _RenderState) -> None:
     overlay owns only one mode at a time. Persisted to app.storage so
     the toggle survives a reload.
     """
-    state.leader_mode_active = not state.leader_mode_active
-    if state.leader_mode_active:
+    state.leader_modifier_active = not state.leader_modifier_active
+    if state.leader_modifier_active:
         # Exclusivity: turn the other two off so the JS overlay knows
         # whose click to deliver.
-        state.catalog_mode_active = False
+        state.catalog_modifier_active = False
         state.click_to_add_active = False
     _save_render_state(state)
     _apply_leader_button(state)
@@ -1664,7 +1664,7 @@ def _toggle_leader_mode(state: _RenderState) -> None:
     _push_catalog_overlay_state(state)
     # Pre-load the FOV slice so the catalog-snap path (Task 6) has
     # data available without the user enabling Catalog Mode first.
-    if state.leader_mode_active:
+    if state.leader_modifier_active:
         _refresh_catalog_fov_slice(state)
 
 
@@ -1674,7 +1674,7 @@ def _apply_leader_button(state: _RenderState) -> None:
     if btn is None:
         return
     try:
-        if state.leader_mode_active:
+        if state.leader_modifier_active:
             btn.props("dense color=primary")
         else:
             btn.props("dense flat")
@@ -1688,8 +1688,8 @@ def _push_catalog_overlay_state(state: _RenderState) -> None:
     overlay_id = state.catalog_overlay_id
     if not overlay_id:
         return
-    enabled = "true" if (state.catalog_mode_active or state.leader_mode_active) else "false"
-    mode = "leader" if state.leader_mode_active else "catalog"
+    enabled = "true" if (state.catalog_modifier_active or state.leader_modifier_active) else "false"
+    mode = "leader" if state.leader_modifier_active else "catalog"
     try:
         ui.run_javascript(
             f"if (window.__catalogOverlaySetActive) "
@@ -1708,7 +1708,7 @@ def _refresh_catalog_fov_slice(state: _RenderState) -> None:
     Cached per ``(frame_idx, catalog version)`` on ``state`` so
     re-selecting the same frame is essentially free (#152).
     """
-    if not (state.catalog_mode_active or state.leader_mode_active):
+    if not (state.catalog_modifier_active or state.leader_modifier_active):
         return
     pipeline = state.pipeline
     if pipeline is None or pipeline.project is None:
@@ -2325,8 +2325,8 @@ def _toggle_click_to_add(state: _RenderState) -> None:
     if state.click_to_add_active:
         # Exclusivity: turn the other two off so the JS overlay knows
         # whose click to deliver.
-        state.catalog_mode_active = False
-        state.leader_mode_active = False
+        state.catalog_modifier_active = False
+        state.leader_modifier_active = False
         ui.notify(
             "Click anywhere on the preview to add a label",
             type="info", timeout=3000,
@@ -2578,28 +2578,28 @@ class _RenderState:
         self.labels_panel: ui.expansion | None = None
         self.labels_list_container: ui.column | None = None
         self.click_to_add_active: bool = False
-        # Catalog click-mode (issue #152). When True the JS overlay sits
-        # on top of the preview, hover shows the nearest-catalog tooltip
-        # and click emits a ``catalog_label_click`` event. Persisted as
-        # an app-level UI preference. The FOV-slice cache is recomputed
-        # whenever the selected frame changes; entries are keyed by
-        # frame_index and contain the full payload sent to the JS side.
-        self.catalog_mode_active: bool = bool(
-            stored.get("catalog_mode_active", False),
+        # Add-label modifiers (issue #154). Catalog and Leader used to
+        # be exclusive modes (#152, #153) — they're now persistent
+        # checkboxes that shape what the one-shot "Add Label" button
+        # does. The legacy ``catalog_mode_active`` / ``leader_mode_active``
+        # keys soft-migrate on first read so users who had a mode on
+        # before the upgrade keep their preference.
+        self.catalog_modifier_active: bool = bool(
+            stored.get("catalog_modifier_active",
+                       stored.get("catalog_mode_active", False)),
         )
+        self.leader_modifier_active: bool = bool(
+            stored.get("leader_modifier_active",
+                       stored.get("leader_mode_active", False)),
+        )
+        # Drop legacy keys so we don't migrate twice and they don't
+        # diverge from the new ones.
+        for legacy in ("catalog_mode_active", "leader_mode_active"):
+            stored.pop(legacy, None)
         self.catalog_overlay_id: str = ""
         self.catalog_overlay: ui.element | None = None
         self.catalog_mode_button: ui.button | None = None
         self.catalog_fov_cache: dict[int, dict] = {}
-        # Leader-line label placement mode (issue #153). When True the
-        # JS overlay routes clicks through ``onClickLeader``: first
-        # click = target (or single click for catalog-snap), second
-        # click = text position. Mutually exclusive with catalog and
-        # click-to-add modes (the JS overlay can only own one mode at
-        # a time).
-        self.leader_mode_active: bool = bool(
-            stored.get("leader_mode_active", False),
-        )
         self.leader_button: ui.button | None = None
         # Preview display mode (issue #148). False = compact (max-h-96,
         # fast overview); True = detail (native size, scrollable — for
@@ -2743,7 +2743,7 @@ async def _load(state: _RenderState) -> None:
             # session — saves the user a second click.
             _apply_catalog_mode_button(state)
             _push_catalog_overlay_state(state)
-            if state.catalog_mode_active:
+            if state.catalog_modifier_active:
                 _refresh_catalog_fov_slice(state)
             ui.notify(f"Ready — {n} frames loaded")
         except RuntimeError as exc:
@@ -2881,7 +2881,7 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
     _update_ref_frame_indicator(state)
     # Recompute the catalog FOV-slice for the new frame and ship it
     # to the JS overlay (issue #152). Cheap when cached.
-    if state.catalog_mode_active:
+    if state.catalog_modifier_active:
         _refresh_catalog_fov_slice(state)
 
     # Keep the pipeline config in sync with state so the preview
