@@ -1277,6 +1277,9 @@ _APP_PERSISTED_FIELDS: tuple[str, ...] = (
     "preview_detail_mode",
     "catalog_modifier_active",
     "leader_modifier_active",
+    "last_label_color",
+    "last_label_font_size",
+    "last_label_offset_radius",
 )
 
 # Per-project fields — serialised into ``manifest.json`` via
@@ -1571,6 +1574,10 @@ def _open_edit_popover(state: _RenderState, label: Label) -> None:
                 label.marker = marker_in.value or "dot"
                 label.leader = leader_in.value or "none"
                 label.offset_radius = int(offset_radius_in.value or 0)
+                state.last_label_color = label.color
+                state.last_label_font_size = label.font_size
+                state.last_label_offset_radius = label.offset_radius
+                _save_render_state(state)
                 _persist_project(state)
                 _refresh_labels_list(state)
                 _schedule_preview_refresh(state)
@@ -2300,8 +2307,10 @@ def _open_create_dialog(
     with ui.dialog() as dialog, ui.card().classes("w-80"):
         ui.label("New label").classes("text-md font-bold")
         text_in = ui.input("Text", value=default_text)
-        color_in = ui.input("Color (hex)", value="#ffff00")
-        font_size_in = ui.number("Font size", value=24, min=6, max=200)
+        color_in = ui.input("Color (hex)", value=state.last_label_color)
+        font_size_in = ui.number(
+            "Font size", value=state.last_label_font_size, min=6, max=200,
+        )
         marker_in = ui.select(
             ["none", "dot", "cross", "circle"],
             value=default_marker, label="Marker",
@@ -2311,7 +2320,8 @@ def _open_create_dialog(
             value=leader_default, label="Leader",
         )
         offset_radius_in = ui.number(
-            "Offset radius (px)", value=50, min=0, max=500,
+            "Offset radius (px)", value=state.last_label_offset_radius,
+            min=0, max=500,
         ).tooltip(
             "Pixel-Abstand zwischen Linie und Target/Text — verhindert "
             "dass die Linie das Objekt überdeckt. Ignoriert bei "
@@ -2343,6 +2353,10 @@ def _open_create_dialog(
                     catalog_dec=(catalog_meta or {}).get("dec"),
                 )
                 state.pipeline.project.labels.append(label)
+                state.last_label_color = label.color
+                state.last_label_font_size = label.font_size
+                state.last_label_offset_radius = label.offset_radius
+                _save_render_state(state)
                 _persist_project(state)
                 _refresh_labels_list(state)
                 _schedule_preview_refresh(state)
@@ -2493,6 +2507,18 @@ class _RenderState:
         # pixel-precise label placement on high-res frames).
         self.preview_detail_mode: bool = stored.get(
             "preview_detail_mode", False,
+        )
+        # Sticky label-styling defaults (#154 follow-up). Color, font
+        # size, and offset radius pre-fill the next create/edit dialog
+        # with whatever the user last saved. Marker and leader stay
+        # modifier-driven so toggling Leader still flips marker to
+        # "none" and back without depending on stale stickies.
+        self.last_label_color: str = stored.get("last_label_color", "#ffff00")
+        self.last_label_font_size: int = int(
+            stored.get("last_label_font_size", 24),
+        )
+        self.last_label_offset_radius: int = int(
+            stored.get("last_label_offset_radius", 50),
         )
         # UI handles for the wrapper + toggle button, populated by
         # ``create_render_layout``. ``_apply_preview_mode`` reads them
