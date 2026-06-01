@@ -326,15 +326,31 @@ def _draw_labels(
             tx = px + label.text_offset_x
             ty = py + label.text_offset_y
             if label.leader != "none":
+                # For callout labels (leader-line), the user clicks
+                # where they want the text to APPEAR (its visual
+                # centre), not its top-left corner. Pre-shift the
+                # PIL anchor by half the bbox so the rendered text
+                # is symmetric around (tx, ty); the leader line's
+                # endpoint is then computed from the centred bbox.
                 bbox = font.getbbox(label.text)
                 text_w = bbox[2] - bbox[0]
                 text_h = bbox[3] - bbox[1]
+                draw_anchor_x = tx - text_w / 2.0
+                draw_anchor_y = ty - text_h / 2.0
                 _draw_leader(
-                    draw, px, py, tx, ty,
+                    draw, px, py,
+                    draw_anchor_x, draw_anchor_y,
                     text_w, text_h,
                     label.leader, label.color, label.font_size,
                 )
-            draw.text((tx, ty), label.text, fill=label.color, font=font)
+                draw.text(
+                    (draw_anchor_x, draw_anchor_y),
+                    label.text, fill=label.color, font=font,
+                )
+            else:
+                # Non-leader labels keep the legacy top-left anchor so
+                # existing manifests render byte-identical (#152, #131).
+                draw.text((tx, ty), label.text, fill=label.color, font=font)
         _draw_marker(draw, px, py, label.marker, label.color)
         drew_any = True
 
