@@ -1300,6 +1300,7 @@ _APP_PERSISTED_FIELDS: tuple[str, ...] = (
     "render_workers",
     "preview_detail_mode",
     "catalog_mode_active",
+    "leader_mode_active",
 )
 
 # Per-project fields — serialised into ``manifest.json`` via
@@ -1499,12 +1500,21 @@ def _build_labels_panel(state: _RenderState) -> None:
                     "Catalog click mode — Hover zeigt nähstes Objekt, "
                     "Klick platziert Label",
                 )
+                state.leader_button = ui.button(
+                    "Leader label", icon="call_made",
+                    on_click=lambda: _toggle_leader_mode(state),
+                ).props("dense flat").tooltip(
+                    "Leader-Line label: 1. Klick = Target, 2. Klick = "
+                    "Textposition; bei Klick nahe einem Catalog-Objekt "
+                    "wird der Text platziert und die Linie zum Objekt gezogen.",
+                )
                 ui.button(
                     "Add label", icon="add",
                     on_click=lambda: _toggle_click_to_add(state),
                 ).props("dense flat")
         _refresh_labels_list(state)
         _apply_catalog_mode_button(state)
+        _apply_leader_button(state)
 
 
 def _refresh_labels_list(state: _RenderState) -> None:
@@ -1622,6 +1632,45 @@ def _apply_catalog_mode_button(state: _RenderState) -> None:
         pass
 
 
+def _toggle_leader_mode(state: _RenderState) -> None:
+    """Toggle leader-line placement mode.
+
+    Mutually exclusive with Catalog mode and click-to-add — the JS
+    overlay owns only one mode at a time. Persisted to app.storage so
+    the toggle survives a reload.
+    """
+    state.leader_mode_active = not state.leader_mode_active
+    if state.leader_mode_active:
+        # Exclusivity: turn the other two off so the JS overlay knows
+        # whose click to deliver.
+        state.catalog_mode_active = False
+        state.click_to_add_active = False
+    state.leader_pending_target = None
+    _save_render_state(state)
+    _apply_leader_button(state)
+    _apply_catalog_mode_button(state)
+    _push_catalog_overlay_state(state)
+    # Pre-load the FOV slice so the catalog-snap path (Task 6) has
+    # data available without the user enabling Catalog Mode first.
+    if state.leader_mode_active:
+        _refresh_catalog_fov_slice(state)
+
+
+def _apply_leader_button(state: _RenderState) -> None:
+    """Highlight the Leader button when active."""
+    btn = state.leader_button
+    if btn is None:
+        return
+    try:
+        if state.leader_mode_active:
+            btn.props("dense color=primary")
+        else:
+            btn.props("dense flat")
+    except RuntimeError:
+        # Client closed mid-update — safe to ignore (same as catalog btn).
+        pass
+
+
 def _push_catalog_overlay_state(state: _RenderState) -> None:
     """Tell the JS overlay whether catalog mode is on (toggles pointer events)."""
     overlay_id = state.catalog_overlay_id
@@ -1644,7 +1693,7 @@ def _refresh_catalog_fov_slice(state: _RenderState) -> None:
     Cached per ``(frame_idx, catalog version)`` on ``state`` so
     re-selecting the same frame is essentially free (#152).
     """
-    if not state.catalog_mode_active:
+    if not (state.catalog_mode_active or state.leader_mode_active):
         return
     pipeline = state.pipeline
     if pipeline is None or pipeline.project is None:
@@ -2304,6 +2353,17 @@ class _RenderState:
         self.catalog_overlay: ui.element | None = None
         self.catalog_mode_button: ui.button | None = None
         self.catalog_fov_cache: dict[int, dict] = {}
+        # Leader-line label placement mode (issue #153). When True the
+        # JS overlay routes clicks through ``onClickLeader``: first
+        # click = target (or single click for catalog-snap), second
+        # click = text position. Mutually exclusive with catalog and
+        # click-to-add modes (the JS overlay can only own one mode at
+        # a time).
+        self.leader_mode_active: bool = bool(
+            stored.get("leader_mode_active", False),
+        )
+        self.leader_button: ui.button | None = None
+        self.leader_pending_target: tuple[float, float] | None = None
         # Preview display mode (issue #148). False = compact (max-h-96,
         # fast overview); True = detail (native size, scrollable — for
         # pixel-precise label placement on high-res frames).
