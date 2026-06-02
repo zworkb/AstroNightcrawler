@@ -2926,6 +2926,12 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
                         "y": lbl.y * preview_scale,
                         "text_offset_x": int(round(lbl.text_offset_x * preview_scale)),
                         "text_offset_y": int(round(lbl.text_offset_y * preview_scale)),
+                        # offset_radius is a pixel measurement too — leaving
+                        # it at orig-pixel value in a thumb-scaled frame
+                        # collapses the leader line (gap > line length) so
+                        # the preview shows almost no visible leader, while
+                        # the final video correctly scales it (#154 follow-up).
+                        "offset_radius": int(round(lbl.offset_radius * preview_scale)),
                     })
                     for lbl in state.pipeline.project.labels
                     if lbl.ref_frame_index == frame_idx
