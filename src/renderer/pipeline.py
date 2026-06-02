@@ -527,10 +527,28 @@ class RenderPipeline:
             else []
         )
         if raw_labels and resize_scale != 1.0:
+            # All pixel-sized fields must scale with the frame resize,
+            # not just the marker position. text_offset and
+            # offset_radius are stored in orig-pixel space; leaving
+            # them at orig-pixel magnitude inside a resized frame
+            # pushes the text far beyond where the user meant it —
+            # leader-line labels at 200 px offsets ended up hundreds
+            # of CSS-px outside the rendered frame after the user
+            # had clearly placed them in-bounds in the preview
+            # (#154 follow-up).
             self._scaled_labels = [
                 lbl.model_copy(update={
                     "x": lbl.x * resize_scale,
                     "y": lbl.y * resize_scale,
+                    "text_offset_x": int(round(
+                        lbl.text_offset_x * resize_scale,
+                    )),
+                    "text_offset_y": int(round(
+                        lbl.text_offset_y * resize_scale,
+                    )),
+                    "offset_radius": int(round(
+                        lbl.offset_radius * resize_scale,
+                    )),
                 })
                 for lbl in raw_labels
             ]
