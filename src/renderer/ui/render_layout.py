@@ -431,6 +431,26 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
             "den aktuellen Frames passen.",
         )
 
+    # Per-frame override: ignore freeze for the currently-selected
+    # frame. Value updates when the user navigates the filmstrip —
+    # see ``_refresh_force_fresh_checkbox`` below.
+    state.force_fresh_checkbox = ui.checkbox(
+        "Dieses Frame: fresh ZScale (Frozen ignorieren)",
+        value=False,
+        on_change=lambda e: _on_force_fresh_toggle(state, e.value),
+    ).classes("text-sm").tooltip(
+        "Nur für das aktuell angezeigte Frame: ignoriere die "
+        "eingefrorenen Auto-Stretch-Parameter und berechne ZScale "
+        "frisch. Nützlich für Frames die nach einer Neuaufnahme "
+        "andere Helligkeit haben als der Rest der Sequenz.",
+    )
+    # Same visibility gate as the freeze row — only meaningful in
+    # auto / auto+manual modes.
+    state.force_fresh_checkbox.bind_visibility_from(
+        state, "stretch_mode",
+        backward=lambda mode: mode in ("auto", "auto+manual"),
+    )
+
     # Visible only in auto / auto+manual modes — the freeze has no
     # effect in manual/histogram modes. ``bind_visibility_from`` with a
     # custom predicate handles the OR cleanly.
@@ -438,6 +458,48 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
         state, "stretch_mode",
         backward=lambda mode: mode in ("auto", "auto+manual"),
     )
+
+
+def _on_force_fresh_toggle(state: _RenderState, checked: bool) -> None:
+    """Toggle ``force_fresh_stretch`` on the currently-displayed frame.
+
+    Mutates both the runtime ``FrameInfo`` (so the pipeline picks the
+    new value on the next stretch_frame call) AND the persisted
+    ``CapturedFrame`` (so the override survives a reload).
+    """
+    if not state.pipeline or not state.pipeline.project:
+        return
+    idx = state.selected_frame
+    if not (0 <= idx < len(state.pipeline.frames)):
+        return
+    frame_info = state.pipeline.frames[idx]
+    frame_info.force_fresh_stretch = bool(checked)
+    fits_basename = frame_info.fits_path.name
+    for point in state.pipeline.project.capture_points:
+        for cf in point.frames:
+            if cf.filename == fits_basename:
+                cf.force_fresh_stretch = bool(checked)
+                break
+    state.histogram_cache.clear()
+    _persist_project(state)
+    _refresh_histogram(state)
+    _schedule_preview_refresh(state)
+
+
+def _refresh_force_fresh_checkbox(state: _RenderState) -> None:
+    """Keep the per-frame ``fresh ZScale`` checkbox in sync with the current frame."""
+    cb = state.force_fresh_checkbox
+    if cb is None or state.pipeline is None:
+        return
+    idx = state.selected_frame
+    if not (0 <= idx < len(state.pipeline.frames)):
+        return
+    try:
+        cb.set_value(
+            bool(state.pipeline.frames[idx].force_fresh_stretch),
+        )
+    except RuntimeError:
+        pass
 
 
 def _update_ref_frame_indicator(state: _RenderState) -> None:
@@ -2596,6 +2658,7 @@ class _RenderState:
         self.auto_stretch_ref_label: ui.label | None = None
         self.auto_stretch_apply_button: ui.button | None = None
         self.auto_stretch_freeze_row: ui.row | None = None
+        self.force_fresh_checkbox: ui.checkbox | None = None
         # Labels panel (issue #131). ``labels_panel`` is the outer
         # ``ui.expansion``; ``labels_list_container`` is the inner column
         # whose children are rebuilt by ``_refresh_labels_list``.
@@ -2938,6 +3001,9 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
     # "Aktuelles Frame übernehmen" button highlights immediately when
     # the user navigates away from the current reference.
     _update_ref_frame_indicator(state)
+    # Keep the per-frame ``fresh ZScale`` checkbox in sync with this
+    # frame's stored override.
+    _refresh_force_fresh_checkbox(state)
     # Recompute the catalog FOV-slice for the new frame and ship it
     # to the JS overlay (issue #152). Cheap when cached.
     if (state.catalog_modifier_active
