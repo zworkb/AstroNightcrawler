@@ -2777,9 +2777,17 @@ def _render_thumb_card(
         frame_index: Capture point index for label.
         thumb: Base64 data URI for thumbnail image.
     """
-    with ui.card().classes("cursor-pointer").on(
+    # Tooltip shows the absolute FITS path so the user can verify which
+    # capture file is which without leaving the renderer.
+    fits_path = ""
+    if state.pipeline and 0 <= idx < len(state.pipeline.frames):
+        fits_path = str(state.pipeline.frames[idx].fits_path.resolve())
+    card = ui.card().classes("cursor-pointer").on(
         "click", lambda _, ii=idx: _show_preview(state, ii),
-    ):
+    )
+    if fits_path:
+        card.tooltip(fits_path)
+    with card:
         ui.image(thumb).classes("w-16 h-16 object-cover")
         ui.label(f"#{frame_index}").classes("text-xs text-center")
 
