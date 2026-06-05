@@ -341,6 +341,7 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
         # Auto-stretched buckets in the cache are now stale (whether we
         # turned freeze on or off, the auto-stretched data changes).
         state.histogram_cache.clear()
+        _save_render_state(state)
         _update_ref_frame_indicator(state)
         _refresh_histogram(state)
         _schedule_preview_refresh(state)
@@ -359,9 +360,50 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
             )
             return
         state.histogram_cache.clear()
+        _save_render_state(state)
         _update_ref_frame_indicator(state)
         _refresh_histogram(state)
         _schedule_preview_refresh(state)
+
+    def _on_reset_stretch() -> None:
+        """Clear the frozen auto-stretch params + reference (#154 follow-up).
+
+        Useful when a project was loaded with stale frozen params from a
+        prior capture session (e.g. a frame was re-shot at a different
+        brightness and the old freeze no longer fits). Confirmation
+        dialog avoids accidental loss of carefully-tuned settings.
+        """
+        with ui.dialog() as dialog, ui.card().classes("w-96"):
+            ui.label("Stretch zurücksetzen?").classes("text-md font-bold")
+            ui.label(
+                "Verwirft die eingefrorenen Auto-Stretch-Parameter und "
+                "die Referenz. Frames rendern danach mit frischem ZScale "
+                "(kann minimal flackern). Du kannst jederzeit per "
+                "'Aktuelles Frame übernehmen' neu einfrieren.",
+            ).classes("text-sm")
+            with ui.row().classes("w-full justify-end gap-2"):
+                ui.button("Abbrechen", on_click=dialog.close).props("flat")
+
+                def _confirm() -> None:
+                    state.auto_stretch_freeze = False
+                    state.auto_stretch_params = None
+                    state.auto_stretch_ref_frame = None
+                    state.histogram_cache.clear()
+                    _save_render_state(state)
+                    _update_ref_frame_indicator(state)
+                    _refresh_histogram(state)
+                    _schedule_preview_refresh(state)
+                    dialog.close()
+                    ui.notify(
+                        "Stretch zurückgesetzt — Frames rendern mit frischem "
+                        "ZScale",
+                        type="info",
+                    )
+
+                ui.button(
+                    "Zurücksetzen", color="negative", on_click=_confirm,
+                )
+        dialog.open()
 
     row = ui.row().classes("w-full items-center gap-3")
     state.auto_stretch_freeze_row = row
@@ -380,6 +422,14 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
             "Aktuelles Frame übernehmen",
             on_click=lambda: _on_set_ref_frame(),
         ).props("dense color=grey-7")
+        ui.button(
+            "Reset", icon="restart_alt",
+            on_click=lambda: _on_reset_stretch(),
+        ).props("dense flat color=grey-6").tooltip(
+            "Verwirft eingefrorene Stretch-Parameter und Referenz — "
+            "nützlich wenn alte persistierte Werte nicht mehr zu "
+            "den aktuellen Frames passen.",
+        )
 
     # Visible only in auto / auto+manual modes — the freeze has no
     # effect in manual/histogram modes. ``bind_visibility_from`` with a
