@@ -33,6 +33,7 @@ from src.renderer.stretch import (
     StretchParams,
     apply_stretch,
     auto_stretch,
+    compute_auto_stretch_params,
 )
 from src.renderer.transitions import crossfade, linear_pan
 from src.renderer.video import check_ffmpeg, encode_video, write_frame_png
@@ -170,6 +171,11 @@ class RenderPipeline:
         # Populated by ``_render_to_dir`` once we know ``resize_scale``;
         # read by transition workers. Empty until then.
         self._scaled_labels: list[Label] = []
+        # Lazily-computed average ZScale across all non-flagged active
+        # frames, applied to frames where ``force_fresh_stretch`` is
+        # set. Cleared on ``invalidate_average_zscale`` (called from
+        # the UI when a flag toggles or a frame is skipped).
+        self._average_zscale_cache: AutoStretchParams | None = None
 
     def load(self) -> None:
         """Load manifest and frame metadata."""
@@ -221,6 +227,7 @@ class RenderPipeline:
         for f in self.frames:
             if f.index == index:
                 f.skipped = True
+                self._average_zscale_cache = None
                 return
 
     def debayered_frame(self, frame_idx: int) -> np.ndarray:
@@ -284,17 +291,17 @@ class RenderPipeline:
         # apply_stretch only consults them in auto / auto+manual modes.
         # Per-frame override: ``force_fresh_stretch`` lets the user mark
         # individual frames (e.g. a recently re-shot exposure with
-        # different brightness) to ignore the project-wide freeze and
-        # compute ZScale fresh on this frame alone (#154 follow-up).
+        # different brightness) to use the average ZScale of all OTHER
+        # non-flagged frames instead of the project freeze. That way an
+        # outlier exposure renders visually consistent with the
+        # sequence (#154 follow-up).
         frame = self.frames[frame_idx]
-        auto_params = (
-            self.config.auto_stretch_params
-            if (
-                self.config.auto_stretch_freeze
-                and not getattr(frame, "force_fresh_stretch", False)
-            )
-            else None
-        )
+        if not self.config.auto_stretch_freeze:
+            auto_params = None
+        elif getattr(frame, "force_fresh_stretch", False):
+            auto_params = self.average_auto_stretch_params()
+        else:
+            auto_params = self.config.auto_stretch_params
         stretched = apply_stretch(
             debayered,
             mode=self.config.stretch_mode,
@@ -307,6 +314,71 @@ class RenderPipeline:
             frame_idx, int(stretched.min()), int(stretched.max()),
         )
         return stretched
+
+    def average_auto_stretch_params(self) -> AutoStretchParams:
+        """Average ZScale limits across all non-skipped, non-flagged frames.
+
+        Used when a frame has ``force_fresh_stretch`` set: instead of
+        the project-wide frozen params (which may not fit this outlier)
+        OR the frame's own fresh ZScale (which would visually pop in
+        the rendered sequence), apply the typical limits of the rest
+        of the sequence. The frame then renders consistent with its
+        neighbours while still being adapted away from the broken
+        freeze (#154 follow-up).
+
+        Cached on first call — drop via
+        :meth:`invalidate_average_zscale_cache` when frame flags or
+        skip status change. Falls back to the frozen params (or a
+        no-op identity range) when no eligible frames are available.
+        """
+        if self._average_zscale_cache is not None:
+            return self._average_zscale_cache
+
+        sums_vmin: list[float] | None = None
+        sums_vmax: list[float] | None = None
+        n = 0
+        for i, frame in enumerate(self.frames):
+            if frame.skipped or getattr(frame, "force_fresh_stretch", False):
+                continue
+            try:
+                data = self.debayered_frame(i)
+                params = compute_auto_stretch_params(data)
+            except Exception as exc:  # noqa: BLE001 — one bad frame must not poison the average
+                logger.warning(
+                    "Skipping frame %d in average ZScale: %s", i, exc,
+                )
+                continue
+            if sums_vmin is None:
+                sums_vmin = list(params.vmin)
+                sums_vmax = list(params.vmax)
+            else:
+                for ch in range(len(params.vmin)):
+                    sums_vmin[ch] += params.vmin[ch]
+                    sums_vmax[ch] += params.vmax[ch]
+            n += 1
+
+        if n == 0 or sums_vmin is None or sums_vmax is None:
+            # No eligible frames — fall back to whatever frozen params
+            # the project has, or a safe identity range.
+            fallback = self.config.auto_stretch_params
+            self._average_zscale_cache = fallback or AutoStretchParams(
+                vmin=[0.0], vmax=[1.0],
+            )
+            return self._average_zscale_cache
+
+        self._average_zscale_cache = AutoStretchParams(
+            vmin=[v / n for v in sums_vmin],
+            vmax=[v / n for v in sums_vmax],
+        )
+        logger.info(
+            "Computed average ZScale across %d frames: vmin=%s vmax=%s",
+            n, self._average_zscale_cache.vmin, self._average_zscale_cache.vmax,
+        )
+        return self._average_zscale_cache
+
+    def invalidate_average_zscale_cache(self) -> None:
+        """Drop the cached average ZScale (next read recomputes)."""
+        self._average_zscale_cache = None
 
     def render(
         self,
