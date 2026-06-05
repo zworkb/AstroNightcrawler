@@ -105,6 +105,12 @@ def create_render_layout() -> None:
                     "absolute inset-0 pointer-events-none",
                 )
             del preview_stack  # only used for the with-context
+            # Absolute path of the currently-displayed frame, shown
+            # below the preview as a thin caption. Same provenance
+            # signal as the filmstrip-thumb tooltip but always visible.
+            state.preview_path_label = ui.label("").classes(
+                "text-xs text-grey w-full text-center break-all"
+            )
         _apply_preview_mode(state)
         # Inject the catalog-overlay script once per page. Mirrors the
         # histogram-overlay pattern (#111) — the JS lives in
@@ -2604,6 +2610,7 @@ class _RenderState:
         # ``create_render_layout``. ``_apply_preview_mode`` reads them
         # to switch class strings + button icon/tooltip on demand.
         self.preview_wrapper: ui.element | None = None
+        self.preview_path_label: ui.label | None = None
         self.preview_detail_button: ui.button | None = None
 
 
@@ -2967,6 +2974,16 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
         return
     try:
         state.preview.set_source(src)
+        # Caption below the image — absolute path of the displayed
+        # frame so the user always sees which file is on screen.
+        if state.preview_path_label is not None:
+            try:
+                fits_path = str(
+                    state.pipeline.frames[frame_idx].fits_path.resolve()
+                )
+            except (AttributeError, IndexError):
+                fits_path = ""
+            state.preview_path_label.text = fits_path
     except RuntimeError:
         logger.info("Preview UI gone before update")
         return
