@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 # pydantic ``BaseModel`` (see #114). We import it eagerly here — ``stretch``
 # is a leaf module (numpy + astropy only) and does not import from
 # ``models.project``, so there is no circular-import risk.
-from src.renderer.stretch import AutoStretchParams
+from src.renderer.stretch import AutoStretchParams, StretchParams
 
 
 class Coordinate(BaseModel):
@@ -170,6 +170,17 @@ class CapturedFrame(BaseModel):
             "Set via the 'Reset' button in the histogram panel — for "
             "outlier exposures (e.g. one re-shot frame with different "
             "brightness) that don't fit the project-wide freeze."
+        ),
+    )
+    stretch_override: StretchParams | None = Field(
+        default=None,
+        description=(
+            "Per-frame manual stretch parameters (black/white/midtone), "
+            "active only when ``force_fresh_stretch`` is True. The "
+            "B/W/M sliders write here instead of the project-wide "
+            "stretch_params when the user is viewing an overridden "
+            "frame, so tuning an outlier exposure doesn't disturb the "
+            "rest of the sequence."
         ),
     )
     # Quality metrics (hfr, star_count, snr) are added in a later issue (#139).

@@ -175,9 +175,30 @@ def _build_stretch_controls(state: _RenderState) -> None:
             return
         state.pipeline.config.stretch_mode = state.stretch_mode
         if state.stretch_mode in ("manual", "auto+manual"):
-            state.pipeline.config.stretch_params = StretchParams(
-                state.black, state.white, state.midtone,
+            params = StretchParams(
+                black=state.black, white=state.white, midtone=state.midtone,
             )
+            # Per-frame routing: if the current frame is "reset"
+            # (force_fresh_stretch=True), B/W/M edits affect ONLY
+            # that frame. Otherwise the project-wide stretch_params
+            # carries the change as before.
+            idx = state.selected_frame
+            frames = state.pipeline.frames
+            if (
+                state.pipeline.project is not None
+                and 0 <= idx < len(frames)
+                and getattr(frames[idx], "force_fresh_stretch", False)
+            ):
+                frames[idx].stretch_override = params
+                fits_basename = frames[idx].fits_path.name
+                for point in state.pipeline.project.capture_points:
+                    for cf in point.frames:
+                        if cf.filename == fits_basename:
+                            cf.stretch_override = params
+                            break
+                _persist_project(state)
+            else:
+                state.pipeline.config.stretch_params = params
         # Repaint handles + tone curve immediately — no need to wait for
         # the (debounced) preview refresh to land.
         _refresh_histogram_overlay(state)
@@ -234,7 +255,7 @@ def _build_stretch_controls(state: _RenderState) -> None:
         state.pipeline.config.stretch_mode = new_mode
         if new_mode in ("manual", "auto+manual"):
             state.pipeline.config.stretch_params = StretchParams(
-                state.black, state.white, state.midtone,
+                black=state.black, white=state.white, midtone=state.midtone,
             )
         _refresh_histogram_overlay(state)
         # Mode switch may change the histogram source bucket
@@ -385,20 +406,35 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
             getattr(frame_info, "force_fresh_stretch", False),
         )
         frame_info.force_fresh_stretch = new_value
+        # When turning the override ON, seed the per-frame stretch
+        # override from the current project params so the sliders
+        # start "where the user was" instead of jumping. When turning
+        # OFF, drop the per-frame copy.
+        if new_value and getattr(frame_info, "stretch_override", None) is None:
+            seed = state.pipeline.config.stretch_params or StretchParams(
+                black=state.black, white=state.white, midtone=state.midtone,
+            )
+            frame_info.stretch_override = StretchParams(
+                black=seed.black, white=seed.white, midtone=seed.midtone,
+            )
+        elif not new_value:
+            frame_info.stretch_override = None
         fits_basename = frame_info.fits_path.name
         for point in state.pipeline.project.capture_points:
             for cf in point.frames:
                 if cf.filename == fits_basename:
                     cf.force_fresh_stretch = new_value
+                    cf.stretch_override = frame_info.stretch_override
                     break
         state.histogram_cache.clear()
         _persist_project(state)
         _refresh_reset_button(state)
+        _sync_sliders_to_current_frame(state)
         _refresh_histogram(state)
         _schedule_preview_refresh(state)
         ui.notify(
             f"Frame #{frame_info.index}: "
-            + ("fresh ZScale" if new_value else "Projekt-Freeze"),
+            + ("eigene Stretch-Params" if new_value else "Projekt-Stretch"),
             type="info", timeout=1500,
         )
 
@@ -457,6 +493,43 @@ def _refresh_reset_button(state: _RenderState) -> None:
             btn.props("dense flat color=grey-6 icon=restart_alt")
     except RuntimeError:
         pass
+
+
+def _sync_sliders_to_current_frame(state: _RenderState) -> None:
+    """Reseed B/W/M slider values from the active source on frame change.
+
+    When the current frame is overridden (``force_fresh_stretch=True``),
+    sliders show that frame's ``stretch_override``. Otherwise they show
+    the project-wide ``config.stretch_params``. ``state._seeding`` is
+    flipped while writing so the seed assignment doesn't fire
+    ``_on_param_change`` and round-trip back into the model.
+    """
+    if state.pipeline is None:
+        return
+    idx = state.selected_frame
+    if not (0 <= idx < len(state.pipeline.frames)):
+        return
+    frame = state.pipeline.frames[idx]
+    is_overridden = bool(getattr(frame, "force_fresh_stretch", False))
+    override = getattr(frame, "stretch_override", None)
+    if is_overridden and override is not None:
+        sp = override
+    else:
+        sp = state.pipeline.config.stretch_params or StretchParams()
+    state._seeding = True
+    try:
+        state.black = sp.black
+        state.white = sp.white
+        state.midtone = sp.midtone
+        if state.black_input is not None:
+            state.black_input.set_value(sp.black)
+        if state.white_input is not None:
+            state.white_input.set_value(sp.white)
+        if state.midtone_input is not None:
+            state.midtone_input.set_value(sp.midtone)
+    finally:
+        state._seeding = False
+    _refresh_histogram_overlay(state)
 
 
 def _update_ref_frame_indicator(state: _RenderState) -> None:
@@ -1135,7 +1208,7 @@ def _on_handle_drag(state: _RenderState, which: str, value: float) -> None:
 
     state.pipeline.config.stretch_mode = state.stretch_mode
     state.pipeline.config.stretch_params = StretchParams(
-        state.black, state.white, state.midtone,
+        black=state.black, white=state.white, midtone=state.midtone,
     )
     _refresh_histogram_overlay(state)
     _schedule_preview_refresh(state)
@@ -2956,10 +3029,13 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
     state.selected_frame = frame_idx
     # Selected frame changed — re-evaluate ref-frame staleness so the
     # "Aktuelles Frame übernehmen" button highlights immediately when
-    # the user navigates away from the current reference, and refresh
-    # the per-frame Reset button to reflect this frame's override.
+    # the user navigates away from the current reference, refresh the
+    # per-frame Reset button to reflect this frame's override, and
+    # reseed the B/W/M sliders from whichever stretch_params source
+    # is active for the new frame (project or per-frame).
     _update_ref_frame_indicator(state)
     _refresh_reset_button(state)
+    _sync_sliders_to_current_frame(state)
     # Recompute the catalog FOV-slice for the new frame and ship it
     # to the JS overlay (issue #152). Cheap when cached.
     if (state.catalog_modifier_active
@@ -3176,7 +3252,7 @@ def _build_render_config(state: _RenderState) -> RenderConfig:
     stretch_params = None
     if state.stretch_mode in ("manual", "auto+manual"):
         stretch_params = StretchParams(
-            state.black, state.white, state.midtone,
+            black=state.black, white=state.white, midtone=state.midtone,
         )
     # Apply alignment settings to global config before render
     settings.render_align_max_dim = int(state.align_max_dim)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from astropy.io import fits
@@ -29,6 +30,12 @@ class FrameInfo:
     # pipeline computes ZScale fresh for this frame, ignoring any
     # frozen auto-stretch params (per-frame "Reset" button).
     force_fresh_stretch: bool = False
+    # Mirror of CapturedFrame.stretch_override — per-frame manual
+    # B/W/M params active when ``force_fresh_stretch`` is True.
+    # ``Any`` rather than ``StretchParams`` to keep this module
+    # free of pydantic imports (importer is consumed by code paths
+    # that boot before stretch.py).
+    stretch_override: Any = None
 
 
 def load_manifest(capture_dir: Path) -> list[FrameInfo]:
@@ -64,6 +71,7 @@ def load_manifest(capture_dir: Path) -> list[FrameInfo]:
             bayer_pattern=bayer,
             exposure=project.capture_settings.exposure_seconds,
             force_fresh_stretch=good[0].force_fresh_stretch,
+            stretch_override=good[0].stretch_override,
         ))
 
     frames.sort(key=lambda f: f.index)

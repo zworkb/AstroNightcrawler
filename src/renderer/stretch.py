@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
 
 import numpy as np
 from astropy.visualization import AsinhStretch, ZScaleInterval
@@ -12,9 +11,13 @@ from pydantic import BaseModel
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class StretchParams:
-    """Manual stretch parameters."""
+class StretchParams(BaseModel):
+    """Manual stretch parameters (black / white / midtone in 0..1).
+
+    Converted from ``@dataclass`` to ``BaseModel`` in #154 follow-up so
+    a per-frame override can be persisted on ``CapturedFrame`` — needs
+    JSON serialisation via pydantic.
+    """
 
     black: float = 0.0
     white: float = 1.0
