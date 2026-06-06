@@ -282,9 +282,17 @@ class RenderPipeline:
 
         # Pass frozen auto-stretch params through when freeze is active —
         # apply_stretch only consults them in auto / auto+manual modes.
+        # Per-frame override via "Reset" button: when
+        # ``force_fresh_stretch`` is set on this frame, ignore the
+        # project freeze and compute ZScale fresh on just this frame.
+        # Useful for outlier exposures (#154 follow-up).
+        frame = self.frames[frame_idx]
         auto_params = (
             self.config.auto_stretch_params
-            if self.config.auto_stretch_freeze
+            if (
+                self.config.auto_stretch_freeze
+                and not getattr(frame, "force_fresh_stretch", False)
+            )
             else None
         )
         stretched = apply_stretch(

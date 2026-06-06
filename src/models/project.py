@@ -162,6 +162,16 @@ class CapturedFrame(BaseModel):
     captured_at: datetime | None = Field(
         default=None, description="UTC timestamp of capture (ISO 8601 in JSON)"
     )
+    force_fresh_stretch: bool = Field(
+        default=False,
+        description=(
+            "Per-frame override: ignore the project's frozen auto-stretch "
+            "params for this specific frame and compute ZScale fresh. "
+            "Set via the 'Reset' button in the histogram panel — for "
+            "outlier exposures (e.g. one re-shot frame with different "
+            "brightness) that don't fit the project-wide freeze."
+        ),
+    )
     # Quality metrics (hfr, star_count, snr) are added in a later issue (#139).
 
 

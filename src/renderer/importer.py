@@ -25,6 +25,10 @@ class FrameInfo:
     bayer_pattern: str | None = None
     exposure: float = 0.0
     skipped: bool = False
+    # Mirror of CapturedFrame.force_fresh_stretch — when True the
+    # pipeline computes ZScale fresh for this frame, ignoring any
+    # frozen auto-stretch params (per-frame "Reset" button).
+    force_fresh_stretch: bool = False
 
 
 def load_manifest(capture_dir: Path) -> list[FrameInfo]:
@@ -59,6 +63,7 @@ def load_manifest(capture_dir: Path) -> list[FrameInfo]:
             dec=point.dec,
             bayer_pattern=bayer,
             exposure=project.capture_settings.exposure_seconds,
+            force_fresh_stretch=good[0].force_fresh_stretch,
         ))
 
     frames.sort(key=lambda f: f.index)

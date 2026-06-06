@@ -366,44 +366,41 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
         _schedule_preview_refresh(state)
 
     def _on_reset_stretch() -> None:
-        """Clear the frozen auto-stretch params + reference (#154 follow-up).
+        """Toggle per-frame override on the currently-displayed frame.
 
-        Useful when a project was loaded with stale frozen params from a
-        prior capture session (e.g. a frame was re-shot at a different
-        brightness and the old freeze no longer fits). Confirmation
-        dialog avoids accidental loss of carefully-tuned settings.
+        Click flips ``CapturedFrame.force_fresh_stretch`` for the
+        current frame only — ON = frame renders with its own fresh
+        ZScale (ignoring the project freeze), OFF = back to freeze.
+        All other frames unaffected. Useful for outlier exposures
+        whose brightness doesn't fit the project-wide freeze (#154
+        follow-up smoke test).
         """
-        with ui.dialog() as dialog, ui.card().classes("w-96"):
-            ui.label("Stretch zurücksetzen?").classes("text-md font-bold")
-            ui.label(
-                "Verwirft die eingefrorenen Auto-Stretch-Parameter und "
-                "die Referenz. Frames rendern danach mit frischem ZScale "
-                "(kann minimal flackern). Du kannst jederzeit per "
-                "'Aktuelles Frame übernehmen' neu einfrieren.",
-            ).classes("text-sm")
-            with ui.row().classes("w-full justify-end gap-2"):
-                ui.button("Abbrechen", on_click=dialog.close).props("flat")
-
-                def _confirm() -> None:
-                    state.auto_stretch_freeze = False
-                    state.auto_stretch_params = None
-                    state.auto_stretch_ref_frame = None
-                    state.histogram_cache.clear()
-                    _save_render_state(state)
-                    _update_ref_frame_indicator(state)
-                    _refresh_histogram(state)
-                    _schedule_preview_refresh(state)
-                    dialog.close()
-                    ui.notify(
-                        "Stretch zurückgesetzt — Frames rendern mit frischem "
-                        "ZScale",
-                        type="info",
-                    )
-
-                ui.button(
-                    "Zurücksetzen", color="negative", on_click=_confirm,
-                )
-        dialog.open()
+        if not state.pipeline or not state.pipeline.project:
+            return
+        idx = state.selected_frame
+        if not (0 <= idx < len(state.pipeline.frames)):
+            return
+        frame_info = state.pipeline.frames[idx]
+        new_value = not bool(
+            getattr(frame_info, "force_fresh_stretch", False),
+        )
+        frame_info.force_fresh_stretch = new_value
+        fits_basename = frame_info.fits_path.name
+        for point in state.pipeline.project.capture_points:
+            for cf in point.frames:
+                if cf.filename == fits_basename:
+                    cf.force_fresh_stretch = new_value
+                    break
+        state.histogram_cache.clear()
+        _persist_project(state)
+        _refresh_reset_button(state)
+        _refresh_histogram(state)
+        _schedule_preview_refresh(state)
+        ui.notify(
+            f"Frame #{frame_info.index}: "
+            + ("fresh ZScale" if new_value else "Projekt-Freeze"),
+            type="info", timeout=1500,
+        )
 
     row = ui.row().classes("w-full items-center gap-3")
     state.auto_stretch_freeze_row = row
@@ -422,13 +419,15 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
             "Aktuelles Frame übernehmen",
             on_click=lambda: _on_set_ref_frame(),
         ).props("dense color=grey-7")
-        ui.button(
-            "Reset", icon="restart_alt",
+        state.frame_reset_button = ui.button(
+            "Dieses Frame: Reset", icon="restart_alt",
             on_click=lambda: _on_reset_stretch(),
         ).props("dense flat color=grey-6").tooltip(
-            "Verwirft eingefrorene Stretch-Parameter und Referenz — "
-            "nützlich wenn alte persistierte Werte nicht mehr zu "
-            "den aktuellen Frames passen.",
+            "Nur für das aktuell angezeigte Frame: ignoriere die "
+            "eingefrorenen Stretch-Parameter und berechne ZScale "
+            "frisch. Nützlich für einzelne Outlier-Exposures, deren "
+            "Helligkeit nicht zum Projekt-Freeze passt. Erneut "
+            "klicken setzt zurück.",
         )
 
     # Visible only in auto / auto+manual modes — the freeze has no
@@ -438,6 +437,26 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
         state, "stretch_mode",
         backward=lambda mode: mode in ("auto", "auto+manual"),
     )
+
+
+def _refresh_reset_button(state: _RenderState) -> None:
+    """Highlight the per-frame Reset button when the current frame has override on."""
+    btn = state.frame_reset_button
+    if btn is None or state.pipeline is None:
+        return
+    idx = state.selected_frame
+    if not (0 <= idx < len(state.pipeline.frames)):
+        return
+    is_overridden = bool(
+        getattr(state.pipeline.frames[idx], "force_fresh_stretch", False),
+    )
+    try:
+        if is_overridden:
+            btn.props("dense color=primary icon=restart_alt")
+        else:
+            btn.props("dense flat color=grey-6 icon=restart_alt")
+    except RuntimeError:
+        pass
 
 
 def _update_ref_frame_indicator(state: _RenderState) -> None:
@@ -2596,6 +2615,7 @@ class _RenderState:
         self.auto_stretch_ref_label: ui.label | None = None
         self.auto_stretch_apply_button: ui.button | None = None
         self.auto_stretch_freeze_row: ui.row | None = None
+        self.frame_reset_button: ui.button | None = None
         # Labels panel (issue #131). ``labels_panel`` is the outer
         # ``ui.expansion``; ``labels_list_container`` is the inner column
         # whose children are rebuilt by ``_refresh_labels_list``.
@@ -2936,8 +2956,10 @@ async def _show_preview(state: _RenderState, frame_idx: int) -> None:
     state.selected_frame = frame_idx
     # Selected frame changed — re-evaluate ref-frame staleness so the
     # "Aktuelles Frame übernehmen" button highlights immediately when
-    # the user navigates away from the current reference.
+    # the user navigates away from the current reference, and refresh
+    # the per-frame Reset button to reflect this frame's override.
     _update_ref_frame_indicator(state)
+    _refresh_reset_button(state)
     # Recompute the catalog FOV-slice for the new frame and ship it
     # to the JS overlay (issue #152). Cheap when cached.
     if (state.catalog_modifier_active
