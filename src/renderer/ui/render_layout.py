@@ -1340,6 +1340,36 @@ def _build_output_settings(state: _RenderState) -> None:
             "angehängt. Pfad in den Project-Settings persistiert.",
         )
 
+        def _pick_music() -> None:
+            from src.ui.folder_browser import FolderBrowserDialog
+
+            def _on_pick(path: Path) -> None:
+                state.music_track = str(path)
+                music_input.set_value(str(path))
+                _save_render_state(state)
+
+            # Start in the music file's parent dir if one is set,
+            # otherwise the user's home — a saner default than CWD
+            # for picking media files.
+            if state.music_track:
+                start = Path(state.music_track).parent
+            else:
+                start = Path.home()
+            if not start.exists():
+                start = Path.cwd()
+            FolderBrowserDialog(
+                on_select=_on_pick,
+                select_files=True,
+                extensions=[".mp3", ".wav", ".m4a", ".ogg", ".flac", ".aac"],
+                title="Musik auswählen",
+            ).open(start)
+
+        ui.button(
+            "Auswählen", icon="audio_file", on_click=_pick_music,
+        ).props("dense").tooltip(
+            "File-Picker für den Musik-Track",
+        )
+
         def _clear_music() -> None:
             state.music_track = None
             music_input.set_value("")

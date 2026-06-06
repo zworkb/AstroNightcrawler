@@ -75,20 +75,60 @@ def list_directory(path: Path) -> list[DirectoryEntry]:
 
 
 class FolderBrowserDialog:
-    """A dialog for navigating and selecting a directory.
+    """A dialog for navigating and selecting a directory or file.
+
+    Default behaviour: directory picker — the user navigates and
+    confirms the current folder via the "Select" button (highlighted
+    green when it contains a ``manifest.json``).
+
+    With ``select_files=True`` the dialog becomes a file picker —
+    clicking a file row selects that file directly and closes the
+    dialog; the "Select" button is hidden because directory selection
+    is not meaningful in this mode. ``extensions`` (lowercase, with
+    leading dot, e.g. ``[".mp3", ".wav"]``) restricts which files are
+    shown.
 
     Usage:
-        dialog = FolderBrowserDialog(on_select=my_callback)
-        dialog.open(start_path)
+        # Pick a project directory:
+        FolderBrowserDialog(on_select=cb).open(start)
+        # Pick a music file:
+        FolderBrowserDialog(
+            on_select=cb, select_files=True,
+            extensions=[".mp3", ".wav"], title="Musik auswählen",
+        ).open(start)
     """
 
-    def __init__(self, on_select: Callable[[Path], None]) -> None:
-        """Init with selection callback.
+    def __init__(
+        self,
+        on_select: Callable[[Path], None],
+        *,
+        select_files: bool = False,
+        extensions: list[str] | None = None,
+        title: str | None = None,
+    ) -> None:
+        """Init with selection callback + optional file-picker mode.
 
         Args:
-            on_select: Called with the selected directory Path.
+            on_select: Called with the selected ``Path`` (directory in
+                default mode, file in ``select_files`` mode).
+            select_files: When True the dialog selects FILES; clicking
+                a file row triggers ``on_select`` and closes the
+                dialog. Default False (directory mode, unchanged).
+            extensions: Only effective when ``select_files=True`` —
+                hides files whose lowercase suffix isn't in this list.
+                ``None`` shows all files.
+            title: Dialog title shown at the top. Defaults to
+                ``"Select Capture Directory"`` or ``"Select File"``
+                depending on mode.
         """
         self._on_select = on_select
+        self._select_files = select_files
+        self._extensions = (
+            [e.lower() for e in extensions] if extensions else None
+        )
+        self._title = title or (
+            "Select File" if select_files else "Select Capture Directory"
+        )
         self._current: Path = Path.cwd()
         self._dialog: ui.dialog | None = None
 
@@ -107,13 +147,19 @@ class FolderBrowserDialog:
             self._dialog.close()
 
         with ui.dialog() as self._dialog, ui.card().classes("w-96"):
-            ui.label("Select Capture Directory").classes("text-lg font-bold")
+            ui.label(self._title).classes("text-lg font-bold")
             ui.label(str(self._current)).classes(
                 "text-xs text-grey break-all",
             )
             ui.separator()
 
             entries = list_directory(self._current)
+            if self._select_files and self._extensions is not None:
+                entries = [
+                    e for e in entries
+                    if e.is_dir
+                    or e.path.suffix.lower() in self._extensions
+                ]
             with ui.column().classes("w-full max-h-80 overflow-y-auto gap-0"):
                 for entry in entries:
                     self._render_entry(entry)
@@ -123,9 +169,13 @@ class FolderBrowserDialog:
         self._dialog.open()
 
     def _render_buttons(self) -> None:
-        """Render Cancel and Select buttons."""
+        """Render Cancel and (directory mode only) Select buttons."""
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
             ui.button("Cancel", on_click=self._dialog.close).props("flat")
+            if self._select_files:
+                # File mode: selection happens on the file-row click.
+                # No directory-confirm button.
+                return
             has_manifest = (self._current / "manifest.json").exists()
             select_btn = ui.button(
                 "Select",
@@ -167,6 +217,11 @@ class FolderBrowserDialog:
             if self._dialog:
                 self._dialog.close()
             self._show()
+        elif self._select_files:
+            # File mode: clicking a file IS the selection.
+            if self._dialog:
+                self._dialog.close()
+            self._on_select(entry.path)
 
     def _select(self) -> None:
         """Confirm selection of current directory."""
