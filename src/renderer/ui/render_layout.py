@@ -1708,6 +1708,18 @@ def _build_labels_panel(state: _RenderState) -> None:
                 ).props("dense").tooltip(
                     "Leader-Linie zwischen Marker und Text zeichnen",
                 )
+                state.wcs_flip_checkbox = ui.checkbox(
+                    "Flip 180°",
+                    value=(
+                        state.pipeline.project.wcs_flip_180
+                        if state.pipeline and state.pipeline.project
+                        else False
+                    ),
+                    on_change=lambda e: _toggle_wcs_flip(state, e.value),
+                ).props("dense").tooltip(
+                    "WCS um 180° drehen — bei verkehrt platzierten "
+                    "Catalog-Labels (Pierside-Bug im Capture-Tool).",
+                )
                 state.add_label_button = ui.button(
                     "Add label", icon="add",
                     on_click=lambda: _arm_add_label(state),
@@ -1888,6 +1900,21 @@ def _toggle_leader_modifier(state: _RenderState, checked: bool) -> None:
     _refresh_add_label_tooltip(state)
 
 
+def _toggle_wcs_flip(state: _RenderState, checked: bool) -> None:
+    """Persist the WCS 180°-flip flag and rebuild the catalog overlay.
+
+    The flag is a project-level setting (different telescopes need it
+    differently — see #157). Toggling invalidates the cached FOV slice
+    so the next refresh recomputes with the new orientation.
+    """
+    if not state.pipeline or not state.pipeline.project:
+        return
+    state.pipeline.project.wcs_flip_180 = bool(checked)
+    _persist_project(state)
+    state.catalog_fov_cache.clear()
+    _refresh_catalog_fov_slice(state)
+
+
 def _arm_add_label(state: _RenderState) -> None:
     """Enter one-shot Add-Label mode (#154).
 
@@ -2051,6 +2078,7 @@ def _compute_catalog_fov_slice(
 
     from src.renderer.catalog import objects_in_fov
     from src.renderer.wcs import (
+        apply_wcs_flip,
         build_wcs,
         pixel_scale_from_fits_header,
         project_catalog_to_pixels,
@@ -2101,6 +2129,8 @@ def _compute_catalog_fov_slice(
             pixel_scale_arcsec=scale,
             north_angle_deg=project.north_angle_deg,
         )
+    if project.wcs_flip_180:
+        wcs = apply_wcs_flip(wcs)
 
     # FOV-radius: the larger of the half-diagonal in degrees. Pick a
     # generous multiplier (1.1x) so objects near the corners aren't
@@ -2815,6 +2845,7 @@ class _RenderState:
         self.catalog_overlay: ui.element | None = None
         self.catalog_modifier_checkbox: ui.checkbox | None = None
         self.leader_modifier_checkbox: ui.checkbox | None = None
+        self.wcs_flip_checkbox: ui.checkbox | None = None
         self.add_label_button: ui.button | None = None
         self.catalog_fov_cache: dict[int, dict] = {}
         # Preview display mode (issue #148). False = compact (max-h-96,

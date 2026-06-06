@@ -89,3 +89,16 @@ def test_project_round_trip_with_labels():
     rebuilt = Project.model_validate_json(project.model_dump_json())
     assert rebuilt.labels == [label]
     assert rebuilt.north_angle_deg == 1.5
+
+
+def test_project_default_wcs_flip_180_is_false():
+    project = Project(project="t", path=SplinePath(control_points=[]))
+    assert project.wcs_flip_180 is False
+
+
+def test_project_loads_old_manifest_without_wcs_flip_180():
+    project = Project.model_validate({
+        "project": "t",
+        "path": {"control_points": []},
+    })
+    assert project.wcs_flip_180 is False

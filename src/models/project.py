@@ -389,6 +389,14 @@ class Project(BaseModel):
         description="Sky orientation correction in degrees; 0° = north up. "
                     "Per-project because mount alignment quirks vary by session.",
     )
+    wcs_flip_180: bool = Field(
+        default=False,
+        description=(
+            "Catalog-Overlay 180° um Frame-Mitte drehen — kompensiert "
+            "Pierside-Bug in manchen Capture-Tools "
+            "(siehe docs/wcs-pierside-analysis.md)."
+        ),
+    )
 
     @model_validator(mode="after")
     def _stamp_current_version(self) -> Project:

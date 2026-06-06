@@ -205,3 +205,20 @@ def project_catalog_to_pixels(
         enriched["pixel_y"] = py
         out.append(enriched)
     return out
+
+
+def apply_wcs_flip(wcs: WCS) -> WCS:
+    """Negate CD/PC matrix → 180° rotation around CRPIX.
+
+    Workaround for capture-tool bugs where the meridian-flip pierside
+    is reflected in PIERSIDE but not in CROTA2, leaving Catalog labels
+    point-mirrored through the frame centre. User toggles this per
+    project; see docs/wcs-pierside-analysis.md for the full picture.
+
+    Mutates ``wcs`` in place and returns it for chaining.
+    """
+    if wcs.wcs.has_cd():
+        wcs.wcs.cd = -wcs.wcs.cd
+    else:
+        wcs.wcs.pc = -wcs.wcs.get_pc()
+    return wcs

@@ -7,6 +7,7 @@ import math
 import pytest
 
 from src.renderer.wcs import (
+    apply_wcs_flip,
     build_wcs,
     north_angle_from_fits_header,
     pixel_scale_from_fits_header,
@@ -150,3 +151,44 @@ def test_north_angle_returns_none_for_empty_header():
     """Caller falls back to project default when header is uninformative."""
     assert north_angle_from_fits_header({}) is None
     assert north_angle_from_fits_header(None) is None
+
+
+def test_apply_wcs_flip_returns_same_wcs_instance():
+    """Helper mutates in place and returns the wcs for chaining."""
+    wcs = build_wcs(
+        center_ra_deg=180.0, center_dec_deg=45.0,
+        frame_dims=(1000, 800), pixel_scale_arcsec=1.0,
+        north_angle_deg=10.0,
+    )
+    assert apply_wcs_flip(wcs) is wcs
+
+
+def test_apply_wcs_flip_is_180deg_rotation_around_crpix():
+    """A pixel offset from CRPIX maps to its point-mirror after flip."""
+    wcs = build_wcs(
+        center_ra_deg=180.0, center_dec_deg=45.0,
+        frame_dims=(1000, 800), pixel_scale_arcsec=1.0,
+        north_angle_deg=10.0,
+    )
+    px0, py0 = 700.0, 200.0
+    ra, dec = wcs.pixel_to_world_values(px0, py0)
+    apply_wcs_flip(wcs)
+    px1, py1 = wcs.world_to_pixel_values(ra, dec)
+    cx, cy = wcs.wcs.crpix[0] - 1, wcs.wcs.crpix[1] - 1
+    assert px1 == pytest.approx(2 * cx - px0, abs=1.0)
+    assert py1 == pytest.approx(2 * cy - py0, abs=1.0)
+
+
+def test_apply_wcs_flip_twice_restores_projection():
+    """Two flips return to the original projection within float tolerance."""
+    wcs = build_wcs(
+        center_ra_deg=180.0, center_dec_deg=45.0,
+        frame_dims=(1000, 800), pixel_scale_arcsec=1.0,
+        north_angle_deg=10.0,
+    )
+    x0, y0 = wcs.world_to_pixel_values(180.05, 45.03)
+    apply_wcs_flip(wcs)
+    apply_wcs_flip(wcs)
+    x1, y1 = wcs.world_to_pixel_values(180.05, 45.03)
+    assert x1 == pytest.approx(x0, abs=1e-6)
+    assert y1 == pytest.approx(y0, abs=1e-6)
