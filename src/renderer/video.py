@@ -100,3 +100,33 @@ def encode_video(
         msg = f"ffmpeg encoding failed (exit {result.returncode})"
         raise RuntimeError(msg)
     logger.info("Video encoded: %s", output_path)
+
+
+def mux_audio(
+    video_path: Path, audio_path: Path, output_path: Path,
+    *, loop: bool = False,
+) -> None:
+    """Mux ``audio_path`` into ``video_path`` and write ``output_path``.
+
+    Video stream is copied (no re-encode); audio is converted to AAC
+    @ 192 kbit/s for broad mp4 compatibility. ``-shortest`` trims the
+    output to the shorter of the two streams.
+
+    When ``loop=True`` the audio input is opened with
+    ``-stream_loop -1`` so a short track repeats until the longer
+    video finishes — ``-shortest`` then ends the output at the video.
+    Raises ``subprocess.CalledProcessError`` if ffmpeg returns
+    non-zero.
+    """
+    cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+    if loop:
+        cmd += ["-stream_loop", "-1"]
+    cmd += [
+        "-i", str(audio_path),
+        "-c:v", "copy",
+        "-c:a", "aac",
+        "-b:a", "192k",
+        "-shortest",
+        str(output_path),
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
