@@ -148,6 +148,34 @@ def test_load_catalog_picks_up_tier_files(tmp_path, monkeypatch):
     assert {"M27", "Sh2-155", "UGC 12158"}.issubset(ids)
 
 
+def test_objects_in_fov_dedup_keeps_highest_priority_only():
+    """A position-cluster of M + NGC + UGC returns ONLY the M entry
+    at top level; the others appear in M's aliases list."""
+    from src.renderer.catalog import objects_in_fov
+    m = {"id": "M31", "name": "M31", "ra": 10.685, "dec": 41.269,
+         "mag": 3.4, "type": "G", "catalog": "M"}
+    ngc = {"id": "NGC224", "name": "NGC 224", "ra": 10.685, "dec": 41.269,
+           "mag": 3.4, "type": "G", "catalog": "NGC"}
+    ugc = {"id": "UGC454", "name": "UGC 454", "ra": 10.685, "dec": 41.269,
+           "mag": 3.4, "type": "G", "catalog": "UGC"}
+    catalog = [ugc, ngc, m]
+    result = objects_in_fov(10.685, 41.269, 0.5, catalog=catalog)
+    assert len(result) == 1
+    assert result[0]["catalog"] == "M"
+    assert [a["catalog"] for a in result[0]["aliases"]] == ["M", "NGC", "UGC"]
+
+
+def test_objects_in_fov_single_entry_self_alias():
+    """An isolated catalog entry has aliases == [self]."""
+    from src.renderer.catalog import objects_in_fov
+    obj = {"id": "X", "name": "X", "ra": 0.0, "dec": 0.0,
+           "mag": 9.0, "type": "G", "catalog": "NGC"}
+    result = objects_in_fov(0.0, 0.0, 0.5, catalog=[obj])
+    assert len(result) == 1
+    assert len(result[0]["aliases"]) == 1
+    assert result[0]["aliases"][0]["id"] == "X"
+
+
 def test_load_catalog_explicit_path_skips_tier_glob(tmp_path):
     """When the caller passes an explicit CSV path, no tier merging happens."""
     csv_path = tmp_path / "catalog.csv"

@@ -33,7 +33,14 @@ from typing import Any
 
 import numpy as np
 
+from src.renderer.catalog_alias import find_aliases
+
 logger = logging.getLogger(__name__)
+
+# Co-location tolerance for alias clustering. Catalog positions for the
+# same physical object commonly agree to <2", so 5" leaves slack for
+# epoch/precision differences without merging genuinely separate objects.
+_ALIAS_TOL_ARCSEC = 5.0
 
 # Repo-root relative paths. The base CSV is committed; we never auto-
 # download. Tier files are opt-in (``make tier-N``) and not committed.
@@ -147,8 +154,16 @@ def objects_in_fov(
             bundled catalog via :func:`load_catalog`.
 
     Returns:
-        List of catalog dicts, each enriched with a ``separation_deg``
-        float, sorted by separation (closest first).
+        List of catalog dicts, one per position-cluster (entries within
+        ~5" of each other collapse to a single result). The survivor of
+        each cluster is the highest-priority entry per
+        :data:`CATALOG_PRIORITY` and carries:
+          * ``separation_deg``: distance of the survivor itself from the
+            FOV center.
+          * ``aliases``: ``list[dict]`` of all cluster members
+            (priority-sorted, survivor at index 0). Aliases carry the
+            raw catalog fields only — no ``separation_deg``.
+        Top-level results stay sorted by survivor separation.
     """
     cat = catalog if catalog is not None else load_catalog()
     if not cat:
@@ -165,11 +180,37 @@ def objects_in_fov(
     # matched subset.
     matched_sorted = [matched[i] for i in idxs]
     sep_sorted = sep[mask][idxs]
+
+    # Fast lookup: id -> separation_deg, for picking the survivor's own
+    # separation (which may differ from the row that triggered the cluster
+    # walk when a lower-priority entry was closer to the FOV center).
+    sep_by_id: dict[str, float] = {
+        row["id"]: float(s)
+        for row, s in zip(matched_sorted, sep_sorted, strict=True)
+    }
+
     result: list[dict[str, Any]] = []
-    for row, s in zip(matched_sorted, sep_sorted, strict=True):
-        enriched = dict(row)  # don't pollute the shared cache
-        enriched["separation_deg"] = float(s)
+    processed_ids: set[str] = set()
+    for row in matched_sorted:
+        if row["id"] in processed_ids:
+            continue
+        cluster = find_aliases(
+            row, matched_sorted, tol_arcsec=_ALIAS_TOL_ARCSEC,
+        )
+        # Mark every cluster member as processed so a later iteration
+        # over a co-located row doesn't emit a duplicate top-level entry.
+        for member in cluster:
+            processed_ids.add(member["id"])
+        survivor = cluster[0]
+        enriched = dict(survivor)  # don't pollute the shared cache
+        enriched["separation_deg"] = sep_by_id[survivor["id"]]
+        # Aliases are plain catalog rows (no separation_deg leak).
+        enriched["aliases"] = [dict(m) for m in cluster]
         result.append(enriched)
+    # The walk above visits ``matched_sorted`` in ascending separation,
+    # but the survivor's own separation may be larger than the row that
+    # triggered its cluster. Re-sort to honour the documented contract.
+    result.sort(key=lambda r: r["separation_deg"])
     return result
 
 

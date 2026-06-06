@@ -2324,7 +2324,12 @@ def _catalog_overlay_script(overlay_id: str) -> str:
         const tip = ensureTooltip(overlay);
         const id = hit.obj.id || '';
         const name = hit.obj.name || id;
-        const label = id && id !== name ? name + ' (' + id + ')' : name;
+        const aliases = (hit.obj.aliases && hit.obj.aliases.length > 0)
+          ? hit.obj.aliases
+          : [hit.obj];
+        const label = (aliases.length > 1)
+          ? aliases.map(a => a.name).join(' / ')
+          : (id && id !== name ? name + ' (' + id + ')' : name);
         // Cursor → object distance in arcmin. Derive deg/orig-px
         // from the hit object's known angular separation from the
         // frame centre + its pixel offset from the same centre —
@@ -2535,6 +2540,29 @@ def _toggle_preview_detail(state: _RenderState) -> None:
     _save_render_state(state)
 
 
+def _attach_aliases_to_catalog_meta(
+    state: _RenderState, catalog_meta: dict | None,
+) -> None:
+    """Look up the FOV-cache entry for ``catalog_meta['catalog_id']`` and
+    copy its ``aliases`` list onto ``catalog_meta`` (#158).
+
+    The JS click event ships only ``catalog_id`` + ``catalog_name``; the
+    alias-cluster information lives state-side on
+    ``state.catalog_fov_cache``. If no match is found (e.g. cache stale),
+    ``aliases`` is set to ``[]`` so downstream code can treat it
+    uniformly.
+    """
+    if catalog_meta is None or not catalog_meta.get("catalog_id"):
+        return
+    fov_slice = state.catalog_fov_cache.get(state.selected_frame)
+    if fov_slice:
+        for obj in fov_slice.get("objects", []):
+            if obj.get("id") == catalog_meta["catalog_id"]:
+                catalog_meta["aliases"] = obj.get("aliases", [])
+                break
+    catalog_meta.setdefault("aliases", [])
+
+
 def _handle_label_placement(state: _RenderState, event) -> None:  # noqa: ANN001
     """Single click-event handler for all four modifier combinations.
 
@@ -2580,6 +2608,10 @@ def _handle_label_placement(state: _RenderState, event) -> None:  # noqa: ANN001
         except (KeyError, TypeError, ValueError):
             catalog_meta = None
 
+    # Re-attach aliases from the per-frame FOV cache (the JS click event
+    # only carries id + name; alias-cluster info lives state-side, #158).
+    _attach_aliases_to_catalog_meta(state, catalog_meta)
+
     leader_default = (
         "line" if kind in ("manual_leader", "catalog_leader") else "none"
     )
@@ -2624,9 +2656,26 @@ def _open_create_dialog(
     else:
         default_marker = "dot"
 
+    aliases = (catalog_meta or {}).get("aliases") or []
+    alias_options = (
+        {a["id"]: a["name"] for a in aliases} if len(aliases) > 1 else None
+    )
+
     with ui.dialog() as dialog, ui.card().classes("w-80"):
         ui.label("New label").classes("text-md font-bold")
+        if alias_options is not None:
+            alias_select = ui.select(
+                options=alias_options,
+                value=aliases[0]["id"],
+                label="Catalog-Eintrag",
+            ).classes("w-full")
+        else:
+            alias_select = None
         text_in = ui.input("Text", value=default_text)
+        if alias_select is not None:
+            alias_select.on_value_change(
+                lambda e: text_in.set_value(alias_options[e.value]),
+            )
         color_in = ui.input("Color (hex)", value=state.last_label_color)
         font_size_in = ui.number(
             "Font size", value=state.last_label_font_size, min=6, max=200,
