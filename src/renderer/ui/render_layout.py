@@ -435,15 +435,14 @@ def _build_auto_freeze_controls(state: _RenderState) -> None:
     # frame. Value updates when the user navigates the filmstrip —
     # see ``_refresh_force_fresh_checkbox`` below.
     state.force_fresh_checkbox = ui.checkbox(
-        "Dieses Frame: Durchschnitt der anderen Frames",
+        "Dieses Frame: fresh ZScale (Frozen ignorieren)",
         value=False,
         on_change=lambda e: _on_force_fresh_toggle(state, e.value),
     ).classes("text-sm").tooltip(
         "Nur für das aktuell angezeigte Frame: ignoriere die "
-        "eingefrorenen Auto-Stretch-Parameter und verwende stattdessen "
-        "den Durchschnitt der ZScale-Limits aller anderen Frames. "
-        "So fügt sich ein Outlier-Frame visuell in die Sequenz ein, "
-        "statt mit eigener Stretch zu poppen.",
+        "eingefrorenen Auto-Stretch-Parameter und berechne ZScale "
+        "frisch. Nützlich für Frames die nach einer Neuaufnahme "
+        "andere Helligkeit haben als der Rest der Sequenz.",
     )
     # Same visibility gate as the freeze row — only meaningful in
     # auto / auto+manual modes.
@@ -467,9 +466,6 @@ def _on_force_fresh_toggle(state: _RenderState, checked: bool) -> None:
     Mutates both the runtime ``FrameInfo`` (so the pipeline picks the
     new value on the next stretch_frame call) AND the persisted
     ``CapturedFrame`` (so the override survives a reload).
-
-    Also invalidates the pipeline's average-ZScale cache so the next
-    preview reflects the new "non-flagged" set.
     """
     if not state.pipeline or not state.pipeline.project:
         return
@@ -485,13 +481,7 @@ def _on_force_fresh_toggle(state: _RenderState, checked: bool) -> None:
                 cf.force_fresh_stretch = bool(checked)
                 break
     state.histogram_cache.clear()
-    state.pipeline.invalidate_average_zscale_cache()
     _persist_project(state)
-    if checked:
-        ui.notify(
-            "Berechne Durchschnitts-Stretch über die anderen Frames…",
-            type="info", timeout=3000,
-        )
     _refresh_histogram(state)
     _schedule_preview_refresh(state)
 
