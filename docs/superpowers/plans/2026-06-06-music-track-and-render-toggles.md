@@ -37,7 +37,7 @@ In `tests/test_render_settings.py`, append:
 
 ```python
 def test_render_settings_round_trip_music_track_and_toggles(tmp_path):
-    """Music-track path + include_music + include_labels persist via JSON."""
+    """Music-track path + include_music + include_labels + loop_music persist via JSON."""
     from src.models.project import (
         CaptureSettings, Project, RenderSettings, SplinePath,
     )
@@ -45,6 +45,7 @@ def test_render_settings_round_trip_music_track_and_toggles(tmp_path):
         music_track="/home/user/music/aurora.mp3",
         include_music=False,
         include_labels=False,
+        loop_music=True,
     )
     proj = Project(
         project="t",
@@ -59,6 +60,7 @@ def test_render_settings_round_trip_music_track_and_toggles(tmp_path):
     assert reloaded.render_settings.music_track == "/home/user/music/aurora.mp3"
     assert reloaded.render_settings.include_music is False
     assert reloaded.render_settings.include_labels is False
+    assert reloaded.render_settings.loop_music is True
 
 
 def test_render_settings_defaults_when_field_missing():
@@ -69,6 +71,7 @@ def test_render_settings_defaults_when_field_missing():
     assert rs.music_track is None
     assert rs.include_music is True
     assert rs.include_labels is True
+    assert rs.loop_music is False
 ```
 
 - [ ] **Step 1.2: Run — they fail with `AttributeError` or similar**
@@ -106,6 +109,14 @@ In `src/models/project.py`, locate `class RenderSettings(BaseModel):`. Append af
             "Toggle whether project labels are burnt into the rendered "
             "frames. Flows into ``RenderConfig.render_labels`` at "
             "config-build time."
+        ),
+    )
+    loop_music: bool = Field(
+        default=False,
+        description=(
+            "When True the music track is looped via ffmpeg "
+            "``-stream_loop -1`` so a short audio file covers the "
+            "full video. Default False — single play-through."
         ),
     )
 ```
@@ -190,6 +201,24 @@ def test_mux_audio_raises_on_ffmpeg_failure(tmp_path):
     ):
         with pytest.raises(subprocess.CalledProcessError):
             mux_audio(video, audio, output)
+
+
+def test_mux_audio_loop_injects_stream_loop_flag(tmp_path):
+    """``loop=True`` adds ``-stream_loop -1`` between video and audio inputs."""
+    video = tmp_path / "v.mp4"; video.write_bytes(b"")
+    audio = tmp_path / "a.mp3"; audio.write_bytes(b"")
+    output = tmp_path / "out.mp4"
+
+    with patch("src.renderer.video.subprocess.run") as run:
+        mux_audio(video, audio, output, loop=True)
+        argv = run.call_args[0][0]
+        # The pattern is ``-i video -stream_loop -1 -i audio``.
+        i_video = argv.index(str(video))
+        i_audio = argv.index(str(audio))
+        assert "-stream_loop" in argv
+        loop_idx = argv.index("-stream_loop")
+        assert i_video < loop_idx < i_audio
+        assert argv[loop_idx + 1] == "-1"
 ```
 
 - [ ] **Step 2.2: Run — fails with ImportError**
@@ -207,18 +236,24 @@ In `src/renderer/video.py`, append:
 ```python
 def mux_audio(
     video_path: Path, audio_path: Path, output_path: Path,
+    *, loop: bool = False,
 ) -> None:
     """Mux ``audio_path`` into ``video_path`` and write ``output_path``.
 
     Video stream is copied (no re-encode); audio is converted to AAC
     @ 192 kbit/s for broad mp4 compatibility. ``-shortest`` trims the
-    output to the shorter of the two streams — works for the typical
-    "music at least as long as the video" case. Raises
-    ``subprocess.CalledProcessError`` if ffmpeg returns non-zero.
+    output to the shorter of the two streams.
+
+    When ``loop=True`` the audio input is opened with
+    ``-stream_loop -1`` so a short track repeats until the longer
+    video finishes — ``-shortest`` then ends the output at the video.
+    Raises ``subprocess.CalledProcessError`` if ffmpeg returns
+    non-zero.
     """
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(video_path),
+    cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+    if loop:
+        cmd += ["-stream_loop", "-1"]
+    cmd += [
         "-i", str(audio_path),
         "-c:v", "copy",
         "-c:a", "aac",
@@ -245,7 +280,7 @@ Expected: 2/2 pass.
 PYTHON_GIL=0 .venv/bin/python -m pytest -q --ignore=tests/test_main.py
 ```
 
-Expected: 274 passed.
+Expected: 275 passed.
 
 - [ ] **Step 2.6: Commit**
 
@@ -289,7 +324,10 @@ if (
     music_path = Path(self.config.music_track)
     if music_path.exists():
         try:
-            mux_audio(silent_path, music_path, output_path)
+            mux_audio(
+                silent_path, music_path, output_path,
+                loop=self.config.loop_music,
+            )
             silent_path.unlink(missing_ok=True)
         except subprocess.CalledProcessError as exc:
             logger.warning(
@@ -307,7 +345,7 @@ if (
 
 `subprocess` and `mux_audio` will need to be imported at the top of `pipeline.py` if not already present.
 
-Also: `RenderConfig` needs `music_track: str | None = None` and `include_music: bool = True` mirrored from `RenderSettings`. Add them next to the existing `render_labels` field.
+Also: `RenderConfig` needs `music_track: str | None = None`, `include_music: bool = True`, and `loop_music: bool = False` mirrored from `RenderSettings`. Add them next to the existing `render_labels` field.
 
 The bridging that maps `render_settings` to `config` lives in `_apply_render_settings_to_config` (or equivalent) inside `render_layout.py`. We'll wire that in Task 4.
 
@@ -341,7 +379,7 @@ keep their fixtures local.
 PYTHON_GIL=0 .venv/bin/python -m pytest -q --ignore=tests/test_main.py
 ```
 
-Expected: 275 passed (one new pipeline test).
+Expected: 276 passed (one new pipeline test).
 
 - [ ] **Step 3.5: Commit**
 
@@ -412,6 +450,18 @@ Inside `_build_output_settings`, immediately after the `with ui.row(...)` openin
                 "angehängt.",
             )
             ui.checkbox(
+                "Musik loopen",
+            ).bind_value(
+                state, "loop_music",
+            ).bind_enabled_from(
+                state, "include_music",
+            ).tooltip(
+                "Wenn das Audio kürzer ist als das Video, wird es "
+                "wiederholt bis das Video endet (ffmpeg "
+                "-stream_loop -1). Wirkt nur wenn 'Musik einbinden' "
+                "aktiv ist.",
+            )
+            ui.checkbox(
                 "Labels einbinden",
             ).bind_value(state, "include_labels").tooltip(
                 "Wenn deaktiviert wird das Video ohne Label-Overlays "
@@ -433,6 +483,7 @@ In `_RenderState.__init__`, find the cluster of fields like
         self.music_track: str | None = None
         self.include_music: bool = True
         self.include_labels: bool = True
+        self.loop_music: bool = False
 ```
 
 In `_PROJECT_PERSISTED_FIELDS` (the tuple near the top of the file
@@ -445,6 +496,7 @@ _PROJECT_PERSISTED_FIELDS = (
     "music_track",
     "include_music",
     "include_labels",
+    "loop_music",
 )
 ```
 
@@ -463,11 +515,12 @@ config = RenderConfig(
     render_labels=state.include_labels,
     music_track=state.music_track,
     include_music=state.include_music,
+    loop_music=state.loop_music,
 )
 ```
 
-Add `music_track` and `include_music` to `RenderConfig` as well — the
-pipeline already reads them in Task 3.
+Add `music_track`, `include_music`, and `loop_music` to `RenderConfig`
+as well — the pipeline already reads them in Task 3.
 
 - [ ] **Step 4.5: Smoke test**
 

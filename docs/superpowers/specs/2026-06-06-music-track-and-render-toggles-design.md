@@ -64,6 +64,14 @@ include_labels: bool = Field(
         "choice per-project."
     ),
 )
+loop_music: bool = Field(
+    default=False,
+    description=(
+        "When True the music track is looped (ffmpeg "
+        "``-stream_loop -1``) so a short audio file covers a longer "
+        "video. Default False — single play-through then audio cuts."
+    ),
+)
 ```
 
 `include_labels` is wired into the existing `RenderConfig.render_labels`
@@ -89,9 +97,12 @@ Musik: [/home/phil/music/aurora.mp3                    ] [Auswählen]  [☐ Musi
 - File path is a read-only `ui.input` (user can copy/paste to share).
 - **Auswählen** opens the existing `FolderBrowserDialog` in single-file
   mode (returns a single absolute path).
-- The two checkboxes bind directly to `render_settings.include_music`
-  and `render_settings.include_labels`. Reordering them onto separate
-  lines is fine; they're independent.
+- The two main checkboxes bind directly to
+  `render_settings.include_music` and `render_settings.include_labels`.
+  Reordering them onto separate lines is fine; they're independent.
+- A third small checkbox **"Musik loopen"** (inline with "Musik
+  einbinden") binds to `loop_music`. Disabled when `include_music`
+  is off.
 - Clicking Auswählen with no current music sets the path; clicking
   again replaces it. A small "✕" icon next to the path field clears
   the track (sets `music_track=None`).
@@ -115,17 +126,23 @@ For music we add a second ffmpeg invocation **after** the video is
 encoded:
 
 ```python
-def mux_audio(video_path: Path, audio_path: Path, output_path: Path) -> None:
+def mux_audio(
+    video_path: Path, audio_path: Path, output_path: Path,
+    *, loop: bool = False,
+) -> None:
     """Mux ``audio_path`` into ``video_path``, write to ``output_path``.
 
     Video stream is copied (no re-encode); audio is encoded to AAC
     for broad mp4 compatibility. ``-shortest`` clips to the shorter
-    of the two streams — typical use case is a music track at least
-    as long as the rendered video, but we don't enforce that.
+    of the two streams. With ``loop=True`` the audio input is opened
+    via ``-stream_loop -1`` so a short track repeats to cover a
+    longer video; ``-shortest`` then ensures output ends with the
+    video.
     """
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", str(video_path),
+    cmd = ["ffmpeg", "-y", "-i", str(video_path)]
+    if loop:
+        cmd += ["-stream_loop", "-1"]
+    cmd += [
         "-i", str(audio_path),
         "-c:v", "copy",
         "-c:a", "aac",
@@ -162,11 +179,11 @@ PIL-side label burn-in. The new field
 
 ## 6. Edge cases
 
-- **Music shorter than video**: ffmpeg's `-shortest` clips the
-  output to the audio length. Video would get cut — undesirable.
-  Mitigation: tooltip on the file picker warning the user to choose
-  a track at least as long as the rendered video. A future enhancement
-  could pad audio with silence or loop it; v1 stays simple.
+- **Music shorter than video**: enable the "Musik loopen" checkbox
+  → ffmpeg's `-stream_loop -1` repeats the audio until the video
+  ends. With the loop disabled (default) `-shortest` clips the
+  output to the audio length and the video gets cut — the file-
+  picker tooltip warns about this.
 - **Music longer than video**: `-shortest` clips audio at video end.
   Correct behaviour — no action.
 - **No ffmpeg available**: `encode_video` already enforces ffmpeg
@@ -179,9 +196,7 @@ PIL-side label burn-in. The new field
 
 ## 7. Out of scope (v1)
 
-- Loop short audio over the full video duration. Could be a
-  `loop_music: bool` toggle later.
-- Fade-in / fade-out on the audio. Same pattern: future enhancement.
+- Fade-in / fade-out on the audio. Future enhancement.
 - Multiple audio tracks per video (e.g. score + narration).
 - Volume / level adjustment. Default = original volume.
 - Per-segment music (different track per transition / capture point).
@@ -204,6 +219,8 @@ Pytest fixtures under `tests/test_music_mux.py`:
   - Not invoked when `include_music=False`.
   - Not invoked when `music_track is None`.
   - Falls back to the silent file when `music_track` doesn't exist.
+- A `mux_audio` test for the loop branch: `loop=True` injects
+  `-stream_loop -1` into the argv between the video and audio inputs.
 
 `include_labels` already has end-to-end coverage via the existing
 render-pipeline tests (`render_labels=False` produces a clean
