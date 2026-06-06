@@ -6,6 +6,7 @@ import logging
 import math
 import os
 import shutil
+import subprocess
 import tempfile
 import threading
 import time
@@ -35,7 +36,7 @@ from src.renderer.stretch import (
     auto_stretch,
 )
 from src.renderer.transitions import crossfade, linear_pan
-from src.renderer.video import check_ffmpeg, encode_video, write_frame_png
+from src.renderer.video import check_ffmpeg, encode_video, mux_audio, write_frame_png
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,14 @@ class RenderConfig:
     # produces a clean clip even if the manifest has a non-empty labels
     # list — used by ``--no-labels`` and the UI's "render clean" toggle.
     render_labels: bool = True
+    # Optional music track muxed into the final video via ffmpeg (#156).
+    # When ``include_music`` is True AND ``music_track`` points at an
+    # existing audio file, the renderer runs a second ffmpeg pass after
+    # ``encode_video`` to attach the audio. ``loop_music`` enables
+    # ``-stream_loop -1`` for soundtracks shorter than the video.
+    music_track: str | None = None
+    include_music: bool = True
+    loop_music: bool = True
 
 
 class RenderPipeline:
@@ -348,13 +357,46 @@ class RenderPipeline:
         try:
             self._render_to_dir(active, temp, on_progress=on_progress)
 
-            logger.info("Encoding video to %s", output_path)
+            wants_audio = (
+                self.config.include_music
+                and self.config.music_track
+            )
+            encode_target = (
+                output_path.with_suffix(".silent.mp4")
+                if wants_audio else output_path
+            )
+
+            logger.info("Encoding video to %s", encode_target)
             encode_t0 = time.monotonic()
             encode_video(
-                temp, output_path,
+                temp, encode_target,
                 self.config.fps, self.config.crf, self.config.speed,
             )
             encode_elapsed = time.monotonic() - encode_t0
+
+            if wants_audio:
+                assert self.config.music_track is not None  # narrowed by wants_audio
+                music_path = Path(self.config.music_track)
+                if music_path.exists():
+                    try:
+                        mux_audio(
+                            encode_target, music_path, output_path,
+                            loop=self.config.loop_music,
+                        )
+                        encode_target.unlink(missing_ok=True)
+                    except subprocess.CalledProcessError as exc:
+                        logger.warning(
+                            "Audio mux failed (%s) — keeping silent render at %s",
+                            exc, output_path,
+                        )
+                        encode_target.replace(output_path)
+                else:
+                    logger.warning(
+                        "Music track %s not found — keeping silent render",
+                        music_path,
+                    )
+                    encode_target.replace(output_path)
+
             file_size = output_path.stat().st_size if output_path.exists() else 0
             logger.info(
                 "Encoding complete in %.1fs, file size %.2f MB",
