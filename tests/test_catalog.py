@@ -176,6 +176,25 @@ def test_objects_in_fov_single_entry_self_alias():
     assert result[0]["aliases"][0]["id"] == "X"
 
 
+def test_objects_in_fov_display_field_is_messier_id_for_m_entry():
+    """Messier entries store NGC name in `name` and Mxx in `id` —
+    `display` must surface the Messier id so the hover-tooltip and
+    label-dialog show 'M65 / NGC 3623' instead of 'NGC 3623 / NGC 3623'.
+    """
+    from src.renderer.catalog import objects_in_fov
+    m65 = {"id": "M65", "name": "NGC 3623", "ra": 169.733, "dec": 13.092,
+           "mag": 9.3, "type": "G", "catalog": "M"}
+    ngc = {"id": "NGC 3623", "name": "NGC 3623", "ra": 169.733, "dec": 13.092,
+           "mag": 9.3, "type": "G", "catalog": "NGC"}
+    result = objects_in_fov(169.733, 13.092, 0.5, catalog=[ngc, m65])
+    assert len(result) == 1
+    assert result[0]["catalog"] == "M"
+    displays = [a["display"] for a in result[0]["aliases"]]
+    assert displays == ["M65", "NGC 3623"]
+    # Survivor itself also gets display populated at top level.
+    assert result[0]["display"] == "M65"
+
+
 def test_load_catalog_explicit_path_skips_tier_glob(tmp_path):
     """When the caller passes an explicit CSV path, no tier merging happens."""
     csv_path = tmp_path / "catalog.csv"

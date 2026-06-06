@@ -33,7 +33,7 @@ from typing import Any
 
 import numpy as np
 
-from src.renderer.catalog_alias import find_aliases
+from src.renderer.catalog_alias import display_label, find_aliases
 
 logger = logging.getLogger(__name__)
 
@@ -204,8 +204,13 @@ def objects_in_fov(
         survivor = cluster[0]
         enriched = dict(survivor)  # don't pollute the shared cache
         enriched["separation_deg"] = sep_by_id[survivor["id"]]
-        # Aliases are plain catalog rows (no separation_deg leak).
-        enriched["aliases"] = [dict(m) for m in cluster]
+        # Aliases are plain catalog rows (no separation_deg leak) +
+        # a ``display`` field with the preferred human-facing name
+        # (Messier/Caldwell use ``id``; others use ``name``).
+        enriched["aliases"] = [
+            {**dict(m), "display": display_label(m)} for m in cluster
+        ]
+        enriched["display"] = display_label(survivor)
         result.append(enriched)
     # The walk above visits ``matched_sorted`` in ascending separation,
     # but the survivor's own separation may be larger than the row that

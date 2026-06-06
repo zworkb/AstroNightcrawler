@@ -2327,9 +2327,10 @@ def _catalog_overlay_script(overlay_id: str) -> str:
         const aliases = (hit.obj.aliases && hit.obj.aliases.length > 0)
           ? hit.obj.aliases
           : [hit.obj];
+        const aliasNames = aliases.map(a => a.display || a.name || a.id);
         const label = (aliases.length > 1)
-          ? aliases.map(a => a.name).join(' / ')
-          : (id && id !== name ? name + ' (' + id + ')' : name);
+          ? aliasNames.join(' / ')
+          : (id && id !== name ? aliasNames[0] + ' (' + id + ')' : aliasNames[0]);
         // Cursor → object distance in arcmin. Derive deg/orig-px
         // from the hit object's known angular separation from the
         // frame centre + its pixel offset from the same centre —
@@ -2642,10 +2643,23 @@ def _open_create_dialog(
     else:
         text_x, text_y = target_x + 12, target_y
 
-    default_text = (
-        (catalog_meta.get("catalog_name") or catalog_meta.get("catalog_id") or "?")
-        if catalog_meta else "Label"
-    )
+    aliases = (catalog_meta or {}).get("aliases") or []
+    # ``display`` is populated by objects_in_fov and prefers the popular
+    # name (M65 over its NGC alias, etc.). Falls back to plain fields if
+    # an older cache entry didn't have it yet.
+    def _alias_display(a: dict) -> str:
+        return a.get("display") or a.get("name") or a.get("id") or "?"
+
+    if aliases:
+        default_text = _alias_display(aliases[0])
+    elif catalog_meta:
+        default_text = (
+            catalog_meta.get("catalog_name")
+            or catalog_meta.get("catalog_id")
+            or "?"
+        )
+    else:
+        default_text = "Label"
     # With a leader line the marker is redundant — the line already
     # points at the target. Default to no marker so the target stays
     # visible (#154 follow-up).
@@ -2656,9 +2670,9 @@ def _open_create_dialog(
     else:
         default_marker = "dot"
 
-    aliases = (catalog_meta or {}).get("aliases") or []
     alias_options = (
-        {a["id"]: a["name"] for a in aliases} if len(aliases) > 1 else None
+        {a["id"]: _alias_display(a) for a in aliases} if len(aliases) > 1
+        else None
     )
 
     with ui.dialog() as dialog, ui.card().classes("w-80"):

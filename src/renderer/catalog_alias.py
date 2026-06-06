@@ -31,6 +31,21 @@ def alias_sort_key(entry: dict[str, Any]) -> tuple[int, str, float, str]:
     return (prio, cat if prio == 4 else "", mag, str(entry.get("id", "")))
 
 
+def display_label(entry: dict[str, Any]) -> str:
+    """Preferred human-facing identifier for a catalog entry.
+
+    Messier and Caldwell store the popular name in ``id`` (e.g.
+    ``id="M65"``, ``name="NGC 3623"``); their ``name`` field is the
+    NGC cross-reference or a trivial name. For other catalogs
+    (NGC, IC, IAU, UGC, …) ``id`` and ``name`` are typically the
+    same string — picking ``name`` is identical there.
+    """
+    cat = entry.get("catalog", "")
+    if cat in ("M", "C"):
+        return str(entry.get("id") or entry.get("name") or "")
+    return str(entry.get("name") or entry.get("id") or "")
+
+
 def find_aliases(
     target: dict[str, Any],
     catalog: list[dict[str, Any]],

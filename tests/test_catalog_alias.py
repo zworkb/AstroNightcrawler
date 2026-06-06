@@ -7,7 +7,7 @@ import types
 import pytest
 
 from src.renderer.catalog_alias import (
-    CATALOG_PRIORITY, alias_sort_key, find_aliases,
+    CATALOG_PRIORITY, alias_sort_key, display_label, find_aliases,
 )
 
 
@@ -100,3 +100,31 @@ def test_attach_aliases_noop_when_meta_none():
     state = types.SimpleNamespace(selected_frame=0, catalog_fov_cache={})
     # Must not raise.
     _attach_aliases_to_catalog_meta(state, None)
+
+
+def test_display_label_uses_id_for_messier():
+    """Messier id (e.g. 'M65') is the popular name — not the NGC alias."""
+    m65 = {"id": "M65", "name": "NGC 3623", "catalog": "M"}
+    assert display_label(m65) == "M65"
+
+
+def test_display_label_uses_id_for_caldwell():
+    """Caldwell id (e.g. 'C1') wins over the NGC name in the row."""
+    c1 = {"id": "C1", "name": "NGC 188", "catalog": "C"}
+    assert display_label(c1) == "C1"
+
+
+def test_display_label_uses_name_for_ngc():
+    """NGC entries: name == id typically — pick name."""
+    ngc = {"id": "NGC 3623", "name": "NGC 3623", "catalog": "NGC"}
+    assert display_label(ngc) == "NGC 3623"
+
+
+def test_display_label_uses_id_when_name_empty_for_messier():
+    m = {"id": "M99", "name": "", "catalog": "M"}
+    assert display_label(m) == "M99"
+
+
+def test_display_label_falls_back_for_unknown_catalog():
+    obj = {"id": "X-1", "name": "X-1", "catalog": "UGC"}
+    assert display_label(obj) == "X-1"
