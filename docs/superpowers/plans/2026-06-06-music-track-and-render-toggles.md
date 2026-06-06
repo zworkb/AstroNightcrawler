@@ -45,7 +45,7 @@ def test_render_settings_round_trip_music_track_and_toggles(tmp_path):
         music_track="/home/user/music/aurora.mp3",
         include_music=False,
         include_labels=False,
-        loop_music=True,
+        loop_music=False,
     )
     proj = Project(
         project="t",
@@ -60,7 +60,7 @@ def test_render_settings_round_trip_music_track_and_toggles(tmp_path):
     assert reloaded.render_settings.music_track == "/home/user/music/aurora.mp3"
     assert reloaded.render_settings.include_music is False
     assert reloaded.render_settings.include_labels is False
-    assert reloaded.render_settings.loop_music is True
+    assert reloaded.render_settings.loop_music is False
 
 
 def test_render_settings_defaults_when_field_missing():
@@ -71,7 +71,7 @@ def test_render_settings_defaults_when_field_missing():
     assert rs.music_track is None
     assert rs.include_music is True
     assert rs.include_labels is True
-    assert rs.loop_music is False
+    assert rs.loop_music is True
 ```
 
 - [ ] **Step 1.2: Run — they fail with `AttributeError` or similar**
@@ -112,11 +112,11 @@ In `src/models/project.py`, locate `class RenderSettings(BaseModel):`. Append af
         ),
     )
     loop_music: bool = Field(
-        default=False,
+        default=True,
         description=(
             "When True the music track is looped via ffmpeg "
             "``-stream_loop -1`` so a short audio file covers the "
-            "full video. Default False — single play-through."
+            "full video. Default True — typical use case."
         ),
     )
 ```
@@ -345,7 +345,7 @@ if (
 
 `subprocess` and `mux_audio` will need to be imported at the top of `pipeline.py` if not already present.
 
-Also: `RenderConfig` needs `music_track: str | None = None`, `include_music: bool = True`, and `loop_music: bool = False` mirrored from `RenderSettings`. Add them next to the existing `render_labels` field.
+Also: `RenderConfig` needs `music_track: str | None = None`, `include_music: bool = True`, and `loop_music: bool = True` mirrored from `RenderSettings`. Add them next to the existing `render_labels` field.
 
 The bridging that maps `render_settings` to `config` lives in `_apply_render_settings_to_config` (or equivalent) inside `render_layout.py`. We'll wire that in Task 4.
 
@@ -483,7 +483,7 @@ In `_RenderState.__init__`, find the cluster of fields like
         self.music_track: str | None = None
         self.include_music: bool = True
         self.include_labels: bool = True
-        self.loop_music: bool = False
+        self.loop_music: bool = True
 ```
 
 In `_PROJECT_PERSISTED_FIELDS` (the tuple near the top of the file

@@ -65,11 +65,13 @@ include_labels: bool = Field(
     ),
 )
 loop_music: bool = Field(
-    default=False,
+    default=True,
     description=(
         "When True the music track is looped (ffmpeg "
         "``-stream_loop -1``) so a short audio file covers a longer "
-        "video. Default False — single play-through then audio cuts."
+        "video. Default True — most rendered sky-path videos last "
+        "longer than the soundtrack the user picks. Set False for "
+        "single play-through then audio cuts."
     ),
 )
 ```
