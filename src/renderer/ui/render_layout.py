@@ -1330,6 +1330,53 @@ def _build_output_settings(state: _RenderState) -> None:
     Args:
         state: Mutable render UI state.
     """
+    with ui.row().classes("w-full items-center gap-2"):
+        music_input = ui.input(
+            label="Musik (.mp3 / .wav / .m4a / .ogg / .flac)",
+            value=state.music_track or "",
+            placeholder="Absoluter Pfad zum Audio-File (optional)",
+        ).classes("flex-grow").bind_value(state, "music_track").tooltip(
+            "Wird beim Render per ffmpeg als Tonspur an das Video "
+            "angehängt. Pfad in den Project-Settings persistiert.",
+        )
+
+        def _clear_music() -> None:
+            state.music_track = None
+            music_input.set_value("")
+            _save_render_state(state)
+
+        ui.button(
+            icon="close", on_click=_clear_music,
+        ).props("dense flat").tooltip(
+            "Music-Track aus der Konfiguration entfernen",
+        )
+
+    with ui.row().classes("w-full items-center gap-4 ml-1"):
+        ui.checkbox("Musik einbinden").bind_value(
+            state, "include_music",
+        ).tooltip(
+            "Wenn aktiv und ein Music-Track ausgewählt ist, wird "
+            "die Audiospur per ffmpeg an das gerenderte Video "
+            "angehängt.",
+        )
+        loop_chk = ui.checkbox("Musik loopen").bind_value(
+            state, "loop_music",
+        ).tooltip(
+            "Wenn das Audio kürzer ist als das Video, wird es "
+            "wiederholt bis das Video endet (ffmpeg "
+            "-stream_loop -1). Wirkt nur wenn 'Musik einbinden' "
+            "aktiv ist.",
+        )
+        # Disable loop when include_music is off so the checkbox
+        # state matches the effective behaviour.
+        loop_chk.bind_enabled_from(state, "include_music")
+        ui.checkbox("Labels einbinden").bind_value(
+            state, "include_labels",
+        ).tooltip(
+            "Wenn deaktiviert wird das Video ohne Label-Overlays "
+            "gerendert, auch wenn welche im Projekt definiert sind.",
+        )
+
     with ui.row().classes("w-full items-center gap-4"):
         ui.select(
             ["none", "crossfade", "linear-pan"], value="linear-pan",
@@ -1451,6 +1498,10 @@ _PROJECT_PERSISTED_FIELDS: tuple[str, ...] = (
     "midtone",
     "auto_stretch_freeze",
     "auto_stretch_params",
+    "music_track",
+    "include_music",
+    "include_labels",
+    "loop_music",
 )
 
 # Kept for backward compat with any external code that imported the old
@@ -2681,6 +2732,11 @@ class _RenderState:
         # in auto / auto+manual modes and gives WYSIWYG previews.
         self.auto_stretch_freeze: bool = True
         self.auto_stretch_params: AutoStretchParams | None = None
+        # Music-track fields (issue #156). Persisted per-project.
+        self.music_track: str | None = None
+        self.include_music: bool = True
+        self.include_labels: bool = True
+        self.loop_music: bool = True
         self.auto_stretch_ref_frame: int | None = None
         # UI handles populated by ``_build_auto_freeze_controls`` —
         # updated by ``_update_ref_frame_indicator`` whenever the
@@ -3271,6 +3327,10 @@ def _build_render_config(state: _RenderState) -> RenderConfig:
         auto_stretch_params=state.auto_stretch_params,
         render_workers=int(state.render_workers),
         linear_pan_blend_tail=int(state.linear_pan_blend_tail),
+        render_labels=state.include_labels,
+        music_track=state.music_track,
+        include_music=state.include_music,
+        loop_music=state.loop_music,
     )
 
 
