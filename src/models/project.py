@@ -150,6 +150,40 @@ class RenderSettings(BaseModel):
     align_max_dim: int = 0
     align_sigma: float = 2.0
 
+    # ----- Audio -----
+    music_track: str | None = Field(
+        default=None,
+        description=(
+            "Absolute path to an audio file (mp3, wav, m4a, ogg, flac) "
+            "muxed into the rendered video when ``include_music`` is True. "
+            "``None`` means no track configured."
+        ),
+    )
+    include_music: bool = Field(
+        default=True,
+        description=(
+            "Toggle whether the configured ``music_track`` is attached "
+            "to the rendered video. When False, the music path stays "
+            "configured but the audio mux is skipped."
+        ),
+    )
+    include_labels: bool = Field(
+        default=True,
+        description=(
+            "Toggle whether project labels are burnt into the rendered "
+            "frames. Flows into ``RenderConfig.render_labels`` at "
+            "config-build time."
+        ),
+    )
+    loop_music: bool = Field(
+        default=True,
+        description=(
+            "When True the music track is looped via ffmpeg "
+            "``-stream_loop -1`` so a short audio file covers the "
+            "full video. Default True — typical use case."
+        ),
+    )
+
 
 class CapturedFrame(BaseModel):
     """A single sub-exposure captured at a capture point."""

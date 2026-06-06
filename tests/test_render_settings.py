@@ -211,3 +211,35 @@ class TestSoftMigration:
         migrated = _maybe_soft_migrate_render_settings(project, app_store)
         assert migrated is False
         assert app_store == {"input_dir": "./out/", "render_workers": 4}
+
+
+def test_render_settings_round_trip_music_track_and_toggles(tmp_path):
+    """Music-track path + include_music + include_labels + loop_music persist via JSON."""
+    rs = RenderSettings(
+        music_track="/home/user/music/aurora.mp3",
+        include_music=False,
+        include_labels=False,
+        loop_music=False,
+    )
+    proj = Project(
+        project="t",
+        path={"control_points": []},  # type: ignore[arg-type]
+        render_settings=rs,
+    )
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(proj.model_dump_json(indent=2))
+    reloaded = Project.model_validate_json(manifest.read_text())
+    assert reloaded.render_settings.music_track == "/home/user/music/aurora.mp3"
+    assert reloaded.render_settings.include_music is False
+    assert reloaded.render_settings.include_labels is False
+    assert reloaded.render_settings.loop_music is False
+
+
+def test_render_settings_defaults_when_field_missing():
+    """Manifests written before this issue still load with sensible defaults."""
+    raw_json = '{"black": 0.0, "white": 1.0, "midtone": 0.5}'
+    rs = RenderSettings.model_validate_json(raw_json)
+    assert rs.music_track is None
+    assert rs.include_music is True
+    assert rs.include_labels is True
+    assert rs.loop_music is True
