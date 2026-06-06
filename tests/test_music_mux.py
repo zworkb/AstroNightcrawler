@@ -169,3 +169,42 @@ def test_pipeline_falls_back_to_silent_when_track_missing(tmp_path, monkeypatch)
     pipeline.render(out_path)
     assert not fake_mux.called
     assert out_path.exists()
+
+
+def test_pipeline_falls_back_to_silent_when_mux_fails(tmp_path, monkeypatch):
+    """ffmpeg mux failure → silent render becomes final, no exception."""
+    import subprocess
+    from unittest.mock import MagicMock
+    from src.renderer.pipeline import RenderConfig, RenderPipeline
+
+    fake_mux = MagicMock(
+        side_effect=subprocess.CalledProcessError(1, "ffmpeg"),
+    )
+    fake_encode = MagicMock(
+        side_effect=lambda temp, out_path, *args, **kwargs: out_path.write_bytes(b""),
+    )
+    monkeypatch.setattr("src.renderer.pipeline.mux_audio", fake_mux)
+    monkeypatch.setattr("src.renderer.pipeline.encode_video", fake_encode)
+    monkeypatch.setattr("src.renderer.pipeline.check_ffmpeg", lambda: True)
+
+    music_file = tmp_path / "music.mp3"; music_file.write_bytes(b"")
+    config = RenderConfig(
+        music_track=str(music_file), include_music=True,
+    )
+    pipeline = RenderPipeline(tmp_path, config)
+    monkeypatch.setattr(
+        pipeline, "active_frames", lambda: [object(), object()],
+    )
+    monkeypatch.setattr(
+        pipeline, "_render_to_dir", lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        pipeline, "_get_temp_dir", lambda: tmp_path / "td",
+    )
+    (tmp_path / "td").mkdir()
+
+    out_path = tmp_path / "out.mp4"
+    pipeline.render(out_path)  # should NOT raise
+
+    assert fake_mux.called
+    assert out_path.exists()
