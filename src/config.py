@@ -34,11 +34,11 @@ class Settings(BaseSettings):
     unpark_delay: float = 3.0  # seconds to wait after unpark before first slew
     render_fps: int = 24
     render_crf: int = 18
-    render_transition: str = "crossfade"
-    render_crossfade_frames: int = 24  # frames per transition (24 = 1s at 24fps)
+    render_transition: str = "linear-pan"
+    render_crossfade_frames: int = 20  # frames per transition (20 = 0.83s at 24fps)
     render_align_max_dim: int = 0  # 0 = no downsampling, >0 = max pixel dimension
     render_align_sigma: float = 2.0  # star detection sigma for alignment
-    render_resolution: str = "native"  # native, 4k, 1440p, 1080p, 720p
+    render_resolution: str = "720p"  # native, 4k, 1440p, 1080p, 720p
     render_speed: float = 1.0  # playback speed multiplier (1=normal, 2=2x faster)
     render_workers: int = Field(
         default=4,

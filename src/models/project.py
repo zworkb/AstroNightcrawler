@@ -141,9 +141,9 @@ class RenderSettings(BaseModel):
     # ----- Output format -----
     fps: int = 24
     crf: int = 18
-    transition: str = "crossfade"
-    crossfade_frames: int = 24
-    resolution: str = "native"
+    transition: str = "linear-pan"
+    crossfade_frames: int = 20
+    resolution: str = "720p"
     speed: float = 1.0
 
     # ----- Alignment -----

@@ -45,9 +45,9 @@ class TestRenderSettingsDefaults:
         assert rs.linear_pan_blend_tail == 0
         assert rs.fps == 24
         assert rs.crf == 18
-        assert rs.transition == "crossfade"
-        assert rs.crossfade_frames == 24
-        assert rs.resolution == "native"
+        assert rs.transition == "linear-pan"
+        assert rs.crossfade_frames == 20
+        assert rs.resolution == "720p"
         assert rs.speed == 1.0
         assert rs.align_max_dim == 0
         assert rs.align_sigma == 2.0
