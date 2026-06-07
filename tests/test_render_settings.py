@@ -42,7 +42,7 @@ class TestRenderSettingsDefaults:
         assert rs.midtone == 1.0
         assert rs.auto_stretch_freeze is True
         assert rs.auto_stretch_params is None
-        assert rs.linear_pan_blend_tail == 0
+        assert rs.linear_pan_blend_tail == 20
         assert rs.fps == 24
         assert rs.crf == 18
         assert rs.transition == "linear-pan"

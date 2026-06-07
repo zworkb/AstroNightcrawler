@@ -136,7 +136,7 @@ class RenderSettings(BaseModel):
     midtone: float = 1.0
     auto_stretch_freeze: bool = True
     auto_stretch_params: AutoStretchParams | None = None
-    linear_pan_blend_tail: int = 0
+    linear_pan_blend_tail: int = 20
 
     # ----- Output format -----
     fps: int = 24
